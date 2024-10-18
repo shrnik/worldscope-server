@@ -3,17 +3,17 @@ import express from "express";
 import pgvector from "pgvector/knex";
 
 import {
-  AutoProcessor,
-  CLIPVisionModelWithProjection,
-  RawImage,
   AutoTokenizer,
   CLIPTextModelWithProjection,
 } from "@xenova/transformers";
 
-import db from "./db.mjs";
-import imageQueue from "./queue.mjs";
-import downloadAll from "./downloader.mjs";
+import axios from "axios";
 import Bluebird from "bluebird";
+import constants from "../constants.mjs";
+import db from "./db.mjs";
+import downloadAll from "./downloader.mjs";
+import imageQueue from "./queue.mjs";
+const { sheetUrl } = constants;
 
 const quantized = false;
 
@@ -32,10 +32,10 @@ db.schema
   .raw("CREATE EXTENSION IF NOT EXISTS vector")
   .createTableIfNotExists("images", (table) => {
     table.increments("id");
-    table.string("path");
-    table.string("cameraId");
-    table.bigInteger("timeStamp");
-    table.vector("embeddings", 512);
+    table.string("url");
+    table.string("camera_id");
+    table.vector("embedding", 512);
+    table.timestamps();
   })
   .then(() => {
     console.log("table created");
@@ -49,33 +49,38 @@ db.schema
 // download all images from a set of URLs
 // and store the images with their embeddings and metadata in the database
 
-router.post("/images", async (req, res) => {
-  const data = await downloadAll("./public");
-  console.log(data.length);
+const getImages = async () => {
+  const res = await axios.get(sheetUrl);
+  const [header, ...data] = Object.values(res.data.values);
+  const imageMetas = data.map((d, index) => {
+    return {
+      url: d[1],
+      cameraId: index,
+      cameraName: d[0],
+    };
+  });
+  return imageMetas;
+};
+
+const queueimages = async () => {
+  const images = await getImages();
   await Bluebird.map(
-    data,
-    async ({ cameraId, timeStamp, path }) => {
+    images,
+    async ({ url, cameraId }) => {
       try {
-        const [{ id }] = await db("images").insert(
-          {
-            path,
-            cameraId,
-            timeStamp,
-          },
-          ["id", "path"]
-        );
-        // publish a message to the queue
-        console.log("queueing", id, path);
-        imageQueue.add({ id, path });
+        imageQueue.add({ url, cameraId });
       } catch (e) {
         console.error(e);
       }
     },
     {
-      concurrency: 5,
+      concurrency: 100,
     }
   );
-  res.json({ message: "Images stored in the database" });
+};
+router.post("/images", async (req, res) => {
+  await queueimages();
+  res.json({ message: "Images queued for embeddings" });
 });
 
 // search for images with a text query
@@ -98,20 +103,24 @@ function cosineSimilarity(A, B) {
 
 router.get("/images", async (req, res) => {
   const { query } = req.query;
-  const textInputs = await tokenizer(query);
-  let { text_embeds } = await textModel(textInputs);
-  const textEmbeddings = Array.from(text_embeds.data);
-  const results = await db
-    .select(["path", "embeddings"])
-    .from("images")
-    .orderBy(db.cosineDistance("embeddings", textEmbeddings))
-    .limit(30);
-  // add the cosine distance to the results
-  results.forEach((result) => {
-    const imageEmbeddings = pgvector.fromSql(result.embeddings);
-    result.cosineDistance = cosineSimilarity(textEmbeddings, imageEmbeddings);
-  });
-  res.json(results);
+  try {
+    const textInputs = await tokenizer(query);
+    let { text_embeds } = await textModel(textInputs);
+    const textEmbeddings = Array.from(text_embeds.data);
+    const results = await db
+      .select(["url", "embedding", "created_at"])
+      .from("images")
+      .orderBy(db.cosineDistance("embedding", textEmbeddings))
+      .limit(30);
+    // add the cosine distance to the results
+    results.forEach((result) => {
+      const imageEmbeddings = pgvector.fromSql(result.embedding);
+      result.cosineDistance = cosineSimilarity(textEmbeddings, imageEmbeddings);
+    });
+    res.json(results);
+  } catch (e) {
+    res.sendStatus(400).statusMessage(e.message);
+  }
 });
 
 // find very different images from the database
