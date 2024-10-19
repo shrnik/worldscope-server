@@ -18,6 +18,9 @@ imageQueue.process(2, async (job, done) => {
       throw new Error("url is required");
     }
     const embedding = await makeImageEmbedding(url);
+    if (!embedding) {
+      throw new Error("Failed to get embedding");
+    }
     const embeddingArray = pgVector.toSql(Array.from(embedding));
     await db("images")
       .insert({
