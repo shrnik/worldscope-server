@@ -10,7 +10,7 @@ const quantized = false;
 
 const imageQueue = new Queue("images", "redis://127.0.0.1:6379");
 
-imageQueue.process(2, async (job) => {
+imageQueue.process(2, async (job, done) => {
   console.log("queueProcessing started");
   const { url, cameraId } = job.data;
   try {
@@ -26,6 +26,7 @@ imageQueue.process(2, async (job) => {
       .merge({
         embedding: embeddingArray,
       });
+    done();
     console.log("queueProcessing ended,");
   } catch (e) {
     console.error(e);
