@@ -3,7 +3,7 @@ module.exports = {
     {
       name: "app1",
       script: "./src/index.mjs",
-      env_production: {
+      env: {
         NODE_ENV: "production",
         PORT: 8000,
         POSTGRES_PASSWORD: "new_password",

@@ -13,6 +13,8 @@ import constants from "../constants.mjs";
 import db from "./db.mjs";
 import downloadAll from "./downloader.mjs";
 import imageQueue from "./queue.mjs";
+import Cron from "node-cron";
+
 const { sheetUrl } = constants;
 
 const quantized = false;
@@ -78,6 +80,15 @@ const queueimages = async () => {
     }
   );
 };
+
+// use node cron to schedule the job to run every 15 mins
+Cron.schedule("*/15 * * * *", async () => {
+  if (process.env.NODE_ENV === "production") {
+    console.log("Queueing images using cron");
+    await queueimages();
+  }
+});
+
 router.post("/images", async (req, res) => {
   await queueimages();
   res.json({ message: "Images queued for embeddings" });
