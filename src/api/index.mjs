@@ -82,7 +82,7 @@ const queueimages = async () => {
 };
 
 // use node cron to schedule the job to run every 15 mins
-Cron.schedule("*/15 * * * *", async () => {
+Cron.schedule("*/15 5-22 * * *", async () => {
   if (process.env.NODE_ENV === "production") {
     console.log("Queueing images using cron");
     await queueimages();
