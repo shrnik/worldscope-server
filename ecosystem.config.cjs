@@ -2,7 +2,7 @@ module.exports = {
   apps: [
     {
       name: "app1",
-      script: "./index.mjs",
+      script: "./src/index.mjs",
       env_production: {
         NODE_ENV: "production",
         PORT: 8000,
