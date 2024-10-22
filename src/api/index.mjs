@@ -70,7 +70,7 @@ const queueimages = async () => {
     images,
     async ({ url, cameraId }) => {
       try {
-        imageQueue.add({ url, cameraId });
+        imageQueue.add("imageProcessor", { url, cameraId });
       } catch (e) {
         console.error(e);
       }
@@ -119,10 +119,10 @@ router.get("/images", async (req, res) => {
     let { text_embeds } = await textModel(textInputs);
     const textEmbeddings = Array.from(text_embeds.data);
     const results = await db
-      .select(["url", "embedding", "created_at"])
+      .select(["url", "embedding", "created_at", "updated_at"])
       .from("images")
       .orderBy(db.cosineDistance("embedding", textEmbeddings))
-      .limit(30);
+      .limit(50);
     // add the cosine distance to the results
     results.forEach((result) => {
       const imageEmbeddings = pgvector.fromSql(result.embedding);

@@ -1,27 +1,37 @@
-import Queue from "bull";
+import { Worker, Queue, RedisConnection } from "bullmq";
 
 import db from "./db.mjs";
 import utils from "./embeddings.mjs";
 import pgVector from "pgvector/knex";
+import { pathToFileURL, fileURLToPath } from "url";
+import path, { dirname } from "path";
 
-const { makeImageEmbedding } = utils;
+const connection = {
+  host: "127.0.0.1",
+  port: 6379,
+};
 
-const quantized = false;
+const imageQueue = new Queue("images", { connection });
 
-const imageQueue = new Queue("images", "redis://127.0.0.1:6379");
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
-imageQueue.process(2, async (job, done) => {
-  console.log("queueProcessing started");
+process.execArgv = process.execArgv.filter(
+  (arg) => !arg.includes("--max-old-space-size=")
+);
+const workerPath = pathToFileURL(path.resolve(__dirname, "image-worker.mjs"));
+const worker = new Worker("images", workerPath, {
+  useWorkerThreads: true,
+  concurrency: 2,
+  connection,
+});
+
+worker.on("completed", async (job) => {
+  console.log("queueProcessing completed");
   const { url, cameraId } = job.data;
+  const { embedding } = job.returnvalue;
+  const embeddingArray = pgVector.toSql(Array.from(embedding));
+
   try {
-    if (!url) {
-      throw new Error("url is required");
-    }
-    const embedding = await makeImageEmbedding(url);
-    if (!embedding) {
-      throw new Error("Failed to get embedding");
-    }
-    const embeddingArray = pgVector.toSql(Array.from(embedding));
     await db("images")
       .insert({
         url,
@@ -35,11 +45,8 @@ imageQueue.process(2, async (job, done) => {
         embedding: embeddingArray,
         updated_at: db.fn.now(),
       });
-    done();
-    console.log("queueProcessing ended,");
   } catch (e) {
     console.error(e);
-    done(e);
   }
 });
 
