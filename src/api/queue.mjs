@@ -31,11 +31,11 @@ const convertToArray = (embedding) => {
 
 worker.on("completed", async (job) => {
   console.log("queueProcessing completed");
-  const { url, cameraId } = job.data;
-  const { embedding } = job.returnvalue;
-  const embeddingArray = pgVector.toSql(convertToArray(embedding));
 
   try {
+    const { url, cameraId } = job.data;
+    const { embedding } = job.returnvalue;
+    const embeddingArray = pgVector.toSql(convertToArray(embedding));
     await db("images")
       .insert({
         url,
