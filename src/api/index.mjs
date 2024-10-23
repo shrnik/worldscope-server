@@ -50,6 +50,12 @@ db.schema
 // });
 // download all images from a set of URLs
 // and store the images with their embeddings and metadata in the database
+//Alter table images add constraint unique_cameraId unique (cameraId);
+// await db.schema.alterTable("images", function (table) {
+//   table.unique("camera_id", {
+//     indexName: "unique_camera_id",
+//   });
+// });
 
 const getImages = async () => {
   const res = await axios.get(sheetUrl);

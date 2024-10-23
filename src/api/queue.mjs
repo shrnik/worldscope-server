@@ -1,4 +1,4 @@
-import { Worker, Queue, RedisConnection } from "bullmq";
+import { Worker, Queue, RedisConnection, Job } from "bullmq";
 
 import db from "./db.mjs";
 import utils from "./embeddings.mjs";
@@ -20,16 +20,20 @@ process.execArgv = process.execArgv.filter(
 );
 const workerPath = pathToFileURL(path.resolve(__dirname, "image-worker.mjs"));
 const worker = new Worker("images", workerPath, {
-  useWorkerThreads: true,
-  concurrency: 2,
   connection,
 });
+
+const convertToArray = (embedding) => {
+  return Object.keys(embedding)
+    .map(Number)
+    .map((key) => embedding[key]);
+};
 
 worker.on("completed", async (job) => {
   console.log("queueProcessing completed");
   const { url, cameraId } = job.data;
   const { embedding } = job.returnvalue;
-  const embeddingArray = pgVector.toSql(Array.from(embedding));
+  const embeddingArray = pgVector.toSql(convertToArray(embedding));
 
   try {
     await db("images")

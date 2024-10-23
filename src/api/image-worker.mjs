@@ -4,7 +4,7 @@ import utils from "./embeddings.mjs";
 const { makeImageEmbedding } = utils;
 
 export default async function (job) {
-  console.log("queueProcessing started");
+  console.time(job.id);
   const { url, cameraId } = job.data;
   try {
     if (!url) {
@@ -14,10 +14,11 @@ export default async function (job) {
     if (!embedding) {
       throw new Error("Failed to get embedding");
     }
+    console.timeEnd(job.id);
 
     return { url, cameraId, embedding };
   } catch (e) {
     console.error(e);
-    done(e);
   }
+  console.timeEnd(job.id);
 }

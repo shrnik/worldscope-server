@@ -2,11 +2,12 @@ export default {
   development: {
     client: "pg",
     connection: {
-      host: "127.0.0.1",
-      port: 5432,
-      user: process.env.POSTGRES_USER,
-      password: process.env.POSTGRES_PASSWORD,
-      database: "worldscope",
+      user: "doadmin",
+      password: "",
+      host: "db-postgresql-nyc3-26124-do-user-18091142-0.k.db.ondigitalocean.com",
+      port: "25060",
+      database: "defaultdb",
+      ssl: true,
     },
     migrations: {
       directory: "./migrations",
