@@ -10,5 +10,12 @@ module.exports = {
         POSTGRES_USER: "postgres",
       },
     },
+    {
+      name: "workers",
+      script: "./src/api/queue.mjs",
+      exec_mode: "cluster",
+      instances: 2,
+      node_args: ["--max_old_space_size=2048"],
+    },
   ],
 };
