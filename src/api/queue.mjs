@@ -5,6 +5,8 @@ import utils from "./embeddings.mjs";
 import pgVector from "pgvector/knex";
 import { pathToFileURL, fileURLToPath } from "url";
 import path, { dirname } from "path";
+import imageWorker from "./image-worker.mjs";
+process.env['NODE_TLS_REJECT_UNAUTHORIZED'] = 0;
 
 const connection = {
   host: "127.0.0.1",
@@ -19,7 +21,7 @@ process.execArgv = process.execArgv.filter(
   (arg) => !arg.includes("--max-old-space-size=")
 );
 const workerPath = pathToFileURL(path.resolve(__dirname, "image-worker.mjs"));
-const worker = new Worker("images", workerPath, {
+const worker = new Worker("images", imageWorker , {
   connection,
 });
 
