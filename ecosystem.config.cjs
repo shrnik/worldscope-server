@@ -14,7 +14,7 @@ module.exports = {
       name: "workers",
       script: "./src/api/queue.mjs",
       exec_mode: "cluster",
-      instances: 2,
+      instances: 1,
       node_args: ["--max_old_space_size=2048"],
     },
   ],
