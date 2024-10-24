@@ -9,8 +9,8 @@ module.exports = {
         POSTGRES_PASSWORD: "new_password",
         POSTGRES_USER: "postgres",
       },
-},
-	{
+    },
+    {
       name: "workers",
       script: "./src/api/queue.mjs",
       exec_mode: "cluster",
