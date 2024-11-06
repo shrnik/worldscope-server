@@ -54,7 +54,3 @@ const convertToArray = (embedding) => {
     .map(Number)
     .map((key) => embedding[key]);
 };
-
-console.log("imageQueue started");
-
-export default imageQueue;
