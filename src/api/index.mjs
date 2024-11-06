@@ -76,7 +76,11 @@ const queueimages = async () => {
     images,
     async ({ url, cameraId }) => {
       try {
-        imageQueue.add("imageProcessor", { url, cameraId });
+        imageQueue.add(
+          "imageProcessor",
+          { url, cameraId },
+          { removeOnComplete: true, deduplication: { id: cameraId } }
+        );
       } catch (e) {
         console.error(e);
       }

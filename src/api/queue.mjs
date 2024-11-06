@@ -1,15 +1,17 @@
-import { Worker, Queue, RedisConnection, Job } from "bullmq";
+import { Queue, Worker } from "bullmq";
 
-import db from "./db.mjs";
-import utils from "./embeddings.mjs";
+import { dirname } from "path";
 import pgVector from "pgvector/knex";
-import { pathToFileURL, fileURLToPath } from "url";
-import path, { dirname } from "path";
+import { fileURLToPath } from "url";
+import db from "./db.mjs";
 import imageWorker from "./image-worker.mjs";
 
+process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0";
+
 const connection = {
-  host: "127.0.0.1",
+  host: process.env.REDIS_HOST,
   port: 6379,
+  password: process.env.REDIS_PASSWORD,
 };
 
 const imageQueue = new Queue("images", { connection });
