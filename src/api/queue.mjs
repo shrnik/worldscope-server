@@ -1,5 +1,6 @@
 import { Queue, Worker } from "bullmq";
-
+import dotenv from "dotenv";
+dotenv.config();
 import { dirname } from "path";
 import pgVector from "pgvector/knex";
 import { fileURLToPath } from "url";
