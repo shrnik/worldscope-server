@@ -19,7 +19,6 @@ process.execArgv = process.execArgv.filter(
   (arg) => !arg.includes("--max-old-space-size=")
 );
 
-console.log("worker started");
 const worker = new Worker("images", imageWorker, {
   connection,
 });
@@ -29,6 +28,10 @@ worker.on("completed", async (job) => {
 
   try {
     const { url, cameraId } = job.data;
+    if (!job?.returnvalue?.embedding) {
+      console.log("No embedding found");
+      return;
+    }
     const { embedding } = job?.returnvalue;
     const embeddingArray = pgVector.toSql(convertToArray(embedding));
     await db("images")

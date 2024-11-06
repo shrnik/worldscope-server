@@ -1,11 +1,6 @@
-import { Queue, Worker } from "bullmq";
+import { Queue } from "bullmq";
 import dotenv from "dotenv";
 dotenv.config();
-import { dirname } from "path";
-import pgVector from "pgvector/knex";
-import { fileURLToPath } from "url";
-import db from "./db.mjs";
-import imageWorker from "./image-worker.mjs";
 
 process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0";
 
