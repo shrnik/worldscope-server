@@ -9,6 +9,7 @@
   "scripts": {
     "start": "node src/index.mjs",
     "dev": "nodemon --max-old-space-size=4096 src/index.mjs --port 3001",
+    "dev:worker": "nodemon --max-old-space-size=4096 src/api/worker.mjs",
     "lint": "eslint --fix src",
     "test": "jest"
   },

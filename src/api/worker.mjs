@@ -19,21 +19,14 @@ process.execArgv = process.execArgv.filter(
   (arg) => !arg.includes("--max-old-space-size=")
 );
 
-const worker = new Worker("images", imageWorker, {
-  connection,
-});
-
-worker.on("completed", async (job) => {
-  console.log("queueProcessing completed");
-
+async function processor(job) {
   try {
-    const { url, cameraId } = job.data;
-    if (!job?.returnvalue?.embedding) {
-      console.log("No embedding found");
+    const result = await imageWorker(job);
+    if (!result) {
       return;
     }
-    const { embedding } = job?.returnvalue;
-    const embeddingArray = pgVector.toSql(convertToArray(embedding));
+    const { url, cameraId, embedding } = result;
+    const embeddingArray = pgVector.toSql(Array.from(embedding));
     await db("images")
       .insert({
         url,
@@ -50,10 +43,17 @@ worker.on("completed", async (job) => {
   } catch (e) {
     console.error(e);
   }
+}
+
+const worker = new Worker("images", processor, {
+  connection,
 });
 
-const convertToArray = (embedding) => {
-  return Object.keys(embedding)
-    .map(Number)
-    .map((key) => embedding[key]);
-};
+worker.on("completed", async (job) => {
+  console.log("worker completed");
+});
+
+worker.on("error", (err) => {
+  // log the error
+  console.error(err);
+});
