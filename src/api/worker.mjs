@@ -15,18 +15,16 @@ const connection = {
 
 console.log("Worker loaded");
 
-process.execArgv = process.execArgv.filter(
-  (arg) => !arg.includes("--max-old-space-size=")
-);
-
 async function processor(job) {
   try {
+    console.time(job.id);
     const result = await imageWorker(job);
     if (!result) {
       return;
     }
     const { url, cameraId, embedding } = result;
     const embeddingArray = pgVector.toSql(Array.from(embedding));
+    console.log(job.id, "embedding created");
     await db("images")
       .insert({
         url,
@@ -40,8 +38,11 @@ async function processor(job) {
         embedding: embeddingArray,
         updated_at: db.fn.now(),
       });
+    console.log(job.id, "inserted into db");
   } catch (e) {
     console.error(e);
+  } finally {
+    console.timeEnd(job.id);
   }
 }
 
