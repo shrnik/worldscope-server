@@ -1,8 +1,6 @@
 import { Job } from "bullmq";
-import utils from "./embeddings.mjs";
+import { makeImageEmbedding } from "./embeddings.mjs";
 import pgVector from "pgvector/knex";
-
-const { makeImageEmbedding } = utils;
 
 export default async function (job) {
   const { url, cameraId } = job.data;
@@ -13,5 +11,5 @@ export default async function (job) {
   if (!embedding) {
     throw new Error("Failed to get embedding");
   }
-  return { url, cameraId, embedding };
+  return { url, cameraId, embedding: Array.from(embedding) };
 }

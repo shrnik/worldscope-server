@@ -13,7 +13,7 @@ import constants from "../constants.mjs";
 import db from "./db.mjs";
 import downloadAll from "./downloader.mjs";
 import imageQueue from "./queue.mjs";
-import Cron from "node-cron";
+import { makeImageEmbedding } from "./embeddings.mjs";
 
 const { sheetUrl } = constants;
 
@@ -102,6 +102,16 @@ const queueimages = async () => {
 router.post("/images", async (req, res) => {
   await queueimages();
   res.json({ message: "Images queued for embeddings" });
+});
+
+router.post("/embeddings/image", async (req, res) => {
+  try {
+    const { url } = req.body;
+    const embedding = await makeImageEmbedding(url);
+    res.json({ url, embedding });
+  } catch (e) {
+    res.status(400).send(e.message);
+  }
 });
 
 // search for images with a text query

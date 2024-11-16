@@ -25,14 +25,10 @@ let textModel = await CLIPTextModelWithProjection.from_pretrained(
 );
 
 async function makeImageEmbedding(imagePath) {
-  try {
-    const image = await RawImage.read(imagePath);
-    const imageInputs = await imageProcessor(image);
-    let { image_embeds } = await visionModel(imageInputs);
-    return image_embeds.data;
-  } catch (e) {
-    console.error(e);
-  }
+  const image = await RawImage.read(imagePath);
+  const imageInputs = await imageProcessor(image);
+  let { image_embeds } = await visionModel(imageInputs);
+  return image_embeds.data;
 }
 
 async function makeTextEmbedding(text) {
@@ -45,7 +41,5 @@ async function makeTextEmbedding(text) {
   }
 }
 
-export default {
-  makeImageEmbedding,
-  makeTextEmbedding,
-};
+export default makeImageEmbedding;
+export { makeImageEmbedding, makeTextEmbedding };
