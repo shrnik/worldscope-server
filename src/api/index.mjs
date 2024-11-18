@@ -5,7 +5,7 @@ import pgvector from "pgvector/knex";
 import {
   AutoTokenizer,
   CLIPTextModelWithProjection,
-} from "@xenova/transformers";
+} from "@huggingface/transformers";
 
 import axios from "axios";
 import Bluebird from "bluebird";

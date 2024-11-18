@@ -2,9 +2,7 @@ import {
   AutoProcessor,
   CLIPVisionModelWithProjection,
   RawImage,
-  AutoTokenizer,
-  CLIPTextModelWithProjection,
-} from "@xenova/transformers";
+} from "@huggingface/transformers";
 
 const quantized = false;
 
@@ -16,14 +14,6 @@ let visionModel = await CLIPVisionModelWithProjection.from_pretrained(
   { quantized }
 );
 
-let tokenizer = await AutoTokenizer.from_pretrained(
-  "Xenova/clip-vit-base-patch16"
-);
-let textModel = await CLIPTextModelWithProjection.from_pretrained(
-  "Xenova/clip-vit-base-patch16",
-  { quantized }
-);
-
 async function makeImageEmbedding(imagePath) {
   const image = await RawImage.read(imagePath);
   const imageInputs = await imageProcessor(image);
@@ -31,15 +21,5 @@ async function makeImageEmbedding(imagePath) {
   return image_embeds.data;
 }
 
-async function makeTextEmbedding(text) {
-  try {
-    const textInputs = await tokenizer(text);
-    let { text_embeds } = await textModel(textInputs);
-    return text_embeds.data;
-  } catch (e) {
-    console.error(e);
-  }
-}
-
 export default makeImageEmbedding;
-export { makeImageEmbedding, makeTextEmbedding };
+export { makeImageEmbedding };
