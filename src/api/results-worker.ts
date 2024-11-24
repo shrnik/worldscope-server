@@ -1,12 +1,12 @@
-import { Worker } from "bullmq";
+import { Job, Worker } from "bullmq";
 import pgVector from "pgvector/knex";
-import db from "./db.mjs";
-import connection from "./redis-connection.mjs";
+import db from "./db";
+import connection from "./redis-connection";
 process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0";
 
 console.log("Worker loaded");
 
-async function processor(job) {
+async function processor(job: Job) {
   try {
     const { url, cameraId, embedding, timestamp } = job.data;
     const embeddingArray = pgVector.toSql(embedding);

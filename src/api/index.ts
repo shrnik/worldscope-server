@@ -2,30 +2,16 @@ import express from "express";
 
 import pgvector from "pgvector/knex";
 
-import {
-  AutoTokenizer,
-  CLIPTextModelWithProjection,
-} from "@huggingface/transformers";
-
 import axios from "axios";
 import Bluebird from "bluebird";
 import constants from "../constants";
-import db from "./db.mjs";
+import db from "./db";
 import downloadAll from "./downloader";
 import imageQueue from "./queue";
 import { makeImageEmbedding } from "./embeddings";
+import makeTextEmbedding from "./text-embeddings";
 
 const { sheetUrl } = constants;
-
-const quantized = false;
-
-let tokenizer = await AutoTokenizer.from_pretrained(
-  "Xenova/clip-vit-base-patch16"
-);
-let textModel = await CLIPTextModelWithProjection.from_pretrained(
-  "Xenova/clip-vit-base-patch16",
-  { quantized }
-);
 
 const router = express.Router();
 
@@ -36,7 +22,7 @@ db.schema
     table.increments("id");
     table.string("url");
     table.string("camera_id");
-    table.vector("embedding", 512);
+    (table as any).vector("embedding", 512);
     table.timestamps();
   })
   .then(() => {
@@ -59,7 +45,7 @@ db.schema
 
 const getImages = async () => {
   const res = await axios.get(sheetUrl);
-  const [header, ...data] = Object.values(res.data.values);
+  const [header, ...data] = Object.values(res.data.values) as string[][];
   const imageMetas = data.map((d, index) => {
     return {
       url: d[1],
@@ -79,7 +65,7 @@ const queueimages = async () => {
         imageQueue.add(
           "imageProcessor",
           { url, cameraId },
-          { removeOnComplete: true, deduplication: { id: cameraId } }
+          { removeOnComplete: true, deduplication: { id: cameraId.toString() } }
         );
       } catch (e) {
         console.error(e);
@@ -109,14 +95,14 @@ router.post("/embeddings/image", async (req, res) => {
     const { url } = req.body;
     const embedding = await makeImageEmbedding(url);
     res.json({ url, embedding });
-  } catch (e) {
+  } catch (e: any) {
     res.status(400).send(e.message);
   }
 });
 
 // search for images with a text query
 
-function cosineSimilarity(A, B) {
+function cosineSimilarity(A: number[], B: number[]) {
   if (A.length !== B.length) throw new Error("A.length !== B.length");
   let dotProduct = 0,
     mA = 0,
@@ -135,13 +121,14 @@ function cosineSimilarity(A, B) {
 router.get("/images", async (req, res) => {
   const { query } = req.query;
   try {
-    const textInputs = await tokenizer(query);
-    let { text_embeds } = await textModel(textInputs);
-    const textEmbeddings = Array.from(text_embeds.data);
+    const textEmbeddings = await makeTextEmbedding(query as string);
+    if (!textEmbeddings) {
+      throw new Error("Invalid query");
+    }
     const results = await db
       .select(["url", "embedding", "created_at", "updated_at"])
       .from("images")
-      .orderBy(db.cosineDistance("embedding", textEmbeddings))
+      .orderBy((db as any).cosineDistance("embedding", textEmbeddings))
       .limit(50);
     // add the cosine distance to the results
     results.forEach((result) => {
@@ -149,8 +136,8 @@ router.get("/images", async (req, res) => {
       result.cosineDistance = cosineSimilarity(textEmbeddings, imageEmbeddings);
     });
     res.json(results);
-  } catch (e) {
-    res.sendStatus(400).statusMessage(e.message);
+  } catch (e: any) {
+    res.status(400).send(e.message);
   }
 });
 

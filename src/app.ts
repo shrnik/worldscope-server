@@ -2,8 +2,8 @@ import express from "express";
 import morgan from "morgan";
 import helmet from "helmet";
 import cors from "cors";
-import middlewares from "./middlewares/index.mjs";
-import api from "./api/index.mjs";
+import middlewares from "./middlewares/index";
+import api from "./api/index";
 
 import dotenv from "dotenv";
 dotenv.config();

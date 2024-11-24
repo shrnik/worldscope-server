@@ -1,11 +1,9 @@
-import app from "./app.mjs";
+import app from "./app";
 // dotenv
 
-import path from "path";
 import { config } from "dotenv";
-import { fileURLToPath } from "url";
-const __filename = fileURLToPath(import.meta.url); // get the resolved path to the file
-const __dirname = path.dirname(__filename);
+import path from "path";
+
 config({ path: path.join(__dirname, ".env") });
 
 const port = process.env.PORT || 5000;

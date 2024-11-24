@@ -1,5 +1,5 @@
 import { Queue } from "bullmq";
-import connection from "./redis-connection.mjs";
+import connection from "./redis-connection";
 
 process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0";
 

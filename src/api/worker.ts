@@ -1,25 +1,17 @@
-import { Worker } from "bullmq";
-import pgVector from "pgvector/knex";
-import db from "./db.mjs";
-import imageWorker from "./image-worker.mjs";
-import timeout from "../utils/timeout.mjs";
-import connection from "./redis-connection.mjs";
-import { resultsQueue } from "./queue.mjs";
+import { Job, Worker } from "bullmq";
+import timeout from "../utils/timeout";
+import imageWorker from "./image-worker";
+import { resultsQueue } from "./queue";
+import connection from "./redis-connection";
 
 process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0";
 
 console.log("Worker loaded");
 
-async function processor(job) {
+async function processor(job: Job) {
   try {
     console.time(job.id);
-    let result;
-    try {
-      result = await timeout(imageWorker(job), 5000);
-    } catch {
-      console.log("Error in imageWorker");
-      return;
-    }
+    const result = await timeout(imageWorker(job), 5000);
     if (!result) {
       console.log("No result from imageWorker");
       return;

@@ -7,12 +7,13 @@ import path from "path";
 const sheetUrl =
   "https://sheets.googleapis.com/v4/spreadsheets/1_tbi4WTx9qGErN-2cvYvEd3qeJxgzd_9N9HJWWPD7SA/values/Main?alt=json&key=AIzaSyA6pmS1gW0a3dWzxdYOfo-sE5hmmvGrW8M";
 
-const isValidExt = (ext) => ["jpg", "jpeg", "png", "gif"].includes(ext);
+const isValidExt = (ext?: string) =>
+  ext && ["jpg", "jpeg", "png", "gif"].includes(ext);
 
-const downloadAll = async (pathName) => {
+const downloadAll = async (pathName: string) => {
   const res = await axios.get(sheetUrl);
   console.log(typeof res.data.values);
-  const [header, ...data] = Object.values(res.data.values);
+  const [header, ...data] = Object.values(res.data.values) as string[][];
   const timeStamp = new Date().getTime();
   const imageMetas = data.map((d, index) => {
     return {
@@ -60,7 +61,7 @@ const downloadAll = async (pathName) => {
             console.error("download timeout");
             reject(false);
           }, 20000);
-          response.data.on("error", (err) => {
+          response.data.on("error", (err: any) => {
             console.error("download error", err);
             reject(false);
           });
