@@ -36,7 +36,7 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   next();
 });
-app.use("/images", express.static("public/images"));
+app.use("/images", express.static("images"));
 
 app.use(middlewares.notFound);
 app.use(middlewares.errorHandler);

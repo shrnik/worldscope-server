@@ -19,7 +19,13 @@ async function processor(job: Job) {
     const { url, cameraId, embedding } = result;
     resultsQueue.add(
       "results",
-      { url, cameraId, embedding, timestamp: new Date() },
+      {
+        ...job.data,
+        url,
+        cameraId,
+        embedding,
+        timestamp: new Date(),
+      },
       { removeOnComplete: true }
     );
   } catch (e) {
