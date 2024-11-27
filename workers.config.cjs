@@ -5,6 +5,7 @@ module.exports = {
       script: "./dist/api/worker.js",
       exec_mode: "cluster",
       instances: 2,
+      max_memory_restart: "4G",
       node_args: ["--max_old_space_size=2048"],
     },
     {
