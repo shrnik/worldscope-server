@@ -53,10 +53,8 @@ const downloadAllImages = async () => {
         console.error(`Failed to download image for ${image.cameraId}`);
       }
     },
-    { concurrency: 5 }
+    { concurrency: 10 }
   );
 };
-
-downloadAllImages();
 
 export default downloadAllImages;
