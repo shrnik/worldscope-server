@@ -1,15 +1,22 @@
-# worldscope-server
+# Worldscope Server
 
-To install dependencies:
+## Semantic Search on Live Images
 
-```bash
-bun install
-```
+The Worldscope Server is a scalable backend application designed for semantic search on a large live dataset of images. It uses the CLIP model to generate embeddings for images and text, enabling efficient and accurate search capabilities.
 
-To run:
+The primary bottleneck is the creation of embeddings for images, which is managed through queues. The workers can be scaled up or down based on the load.
 
-```bash
-bun run index.js
-```
+[UI](https://shrnik.github.io/worldscope-ui/#/search)
 
-This project was created using `bun init` in bun v1.1.34. [Bun](https://bun.sh) is a fast all-in-one JavaScript runtime.
+![alt text](image-1.png)
+
+We have a dataset of around 5k live image urls.
+
+Embeddings are stored in a Postgres db
+
+We use BullJs for queue management.
+
+### End points
+
+- POST `/api/v1/images` - Enqueue all images for processing.
+- GET `api/v1/images?query=storms` - Search for images based on a query
