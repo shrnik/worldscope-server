@@ -1,8 +1,12 @@
 import { Job } from "bullmq";
-import { makeImageEmbedding } from "./embeddings.mjs";
-import pgVector from "pgvector/knex";
+import { makeImageEmbedding } from "./embeddings";
 
-export default async function (job) {
+type ImageResult = {
+  url: string;
+  cameraId: string;
+  embedding: number[];
+};
+export default async function (job: Job): Promise<ImageResult> {
   const { url, cameraId } = job.data;
   if (!url) {
     throw new Error("url is required");

@@ -2,8 +2,8 @@ import express from "express";
 import morgan from "morgan";
 import helmet from "helmet";
 import cors from "cors";
-import middlewares from "./middlewares/index.mjs";
-import api from "./api/index.mjs";
+import middlewares from "./middlewares/index";
+import api from "./api/index";
 
 import dotenv from "dotenv";
 dotenv.config();
@@ -36,7 +36,7 @@ app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   next();
 });
-app.use("/images", express.static("public/images"));
+app.use("/images", express.static("images"));
 
 app.use(middlewares.notFound);
 app.use(middlewares.errorHandler);

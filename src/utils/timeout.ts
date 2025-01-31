@@ -1,6 +1,10 @@
-async function timeout(promise, ms, errorMsg) {
-  let timer;
-  const timeoutPromise = new Promise((_, reject) => {
+async function timeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  errorMsg?: string
+): Promise<T> {
+  let timer: Timer;
+  const timeoutPromise = new Promise<any>((_, reject) => {
     timer = setTimeout(
       () => reject(new Error(!errorMsg ? "Timeout" : errorMsg)),
       ms

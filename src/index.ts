@@ -1,16 +1,21 @@
-import app from "./app.mjs";
+import app from "./app";
 // dotenv
 
-import path from "path";
 import { config } from "dotenv";
-import { fileURLToPath } from "url";
-const __filename = fileURLToPath(import.meta.url); // get the resolved path to the file
-const __dirname = path.dirname(__filename);
+import path from "path";
+import cron from "node-cron";
+import downloadAllImages from "./api/downloadAllImages";
+
 config({ path: path.join(__dirname, ".env") });
 
 const port = process.env.PORT || 5000;
+
 app.listen(port, () => {
   /* eslint-disable no-console */
   console.log(`Listening: http://localhost:${port}`);
   /* eslint-enable no-console */
+});
+
+cron.schedule("0 */2 * * *", async () => {
+  downloadAllImages();
 });
