@@ -15,7 +15,3 @@ app.listen(port, () => {
   console.log(`Listening: http://localhost:${port}`);
   /* eslint-enable no-console */
 });
-
-cron.schedule("0 */2 * * *", async () => {
-  downloadAllImages();
-});

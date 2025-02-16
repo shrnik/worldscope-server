@@ -10,6 +10,8 @@ import downloadAll from "./downloader";
 import imageQueue from "./queue";
 import { makeImageEmbedding } from "./embeddings";
 import makeTextEmbedding from "./text-embeddings";
+import { saveImage } from "./download-image";
+import path from "path";
 
 const { sheetUrl } = constants;
 
@@ -62,9 +64,17 @@ const queueimages = async () => {
     images,
     async ({ url, cameraId }) => {
       try {
+        const result = await saveImage(cameraId, url);
+        if (!result) {
+          throw new Error("Failed to save image");
+        }
+        const newUrl = path.join(
+          process.env.IMAGES_BASE_URL as string,
+          result.filePath
+        );
         imageQueue.add(
           "imageProcessor",
-          { url, cameraId },
+          { url: newUrl, cameraId },
           { removeOnComplete: true, deduplication: { id: cameraId.toString() } }
         );
       } catch (e) {
@@ -72,7 +82,7 @@ const queueimages = async () => {
       }
     },
     {
-      concurrency: 100,
+      concurrency: 10,
     }
   );
 };
