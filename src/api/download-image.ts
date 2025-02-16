@@ -35,10 +35,15 @@ async function downloadImage(
   }
 }
 
+const isValidExt = (ext?: string) =>
+  ext && ["jpg", "jpeg", "png", "gif"].includes(ext);
+
 async function saveImage(cameraId: number | string, url: string) {
   try {
     const rawImage = await RawImage.fromURL(url);
     const timestamp = new Date().toISOString();
+    const tempExt = url.split(".").pop();
+    const ext = isValidExt(tempExt) ? tempExt : "jpg";
 
     // Create a folder structure based on the cameraId and timestamp
     // path looks like: images/YYYY-MM-DD/hour/cameraId/timestamp.jpg
@@ -47,7 +52,7 @@ async function saveImage(cameraId: number | string, url: string) {
     fs.mkdirSync(folderPath, { recursive: true });
 
     // Save the image to the folder
-    const filePath = path.join(folderPath, `default.jpg`);
+    const filePath = path.join(folderPath, `default.${ext}`);
     await rawImage.save(filePath);
     // save the path to the database
     return { cameraId, url, timestamp, filePath: filePath.split("images/")[1] };
