@@ -68,9 +68,9 @@ const queueimages = async () => {
         if (!result) {
           throw new Error("Failed to save image");
         }
-        const newUrl = path.join(
-          process.env.IMAGES_BASE_URL as string,
-          result.filePath
+        const newUrl = new URL(
+          result.filePath,
+          process.env.IMAGES_BASE_URL as string
         );
         imageQueue.add(
           "imageProcessor",
@@ -96,8 +96,8 @@ const queueimages = async () => {
 // });
 
 router.post("/images", async (req, res) => {
-  await queueimages();
-  res.json({ message: "Images queued for embeddings" });
+  queueimages();
+  res.json({ message: "Images will be queued for embeddings" });
 });
 
 router.post("/embeddings/image", async (req, res) => {
