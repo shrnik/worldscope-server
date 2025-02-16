@@ -45,6 +45,7 @@ async function processor(job: Job) {
           .onConflict("camera_id")
           .merge({
             embedding: embeddingArray,
+            url: url,
             updated_at: db.fn.now(),
           });
         console.log(job.id, "inserted into db");
