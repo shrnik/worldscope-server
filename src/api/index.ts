@@ -20,11 +20,11 @@ const router = express.Router();
 // create a table in the database to store the image features using Knex
 db.schema
   .raw("CREATE EXTENSION IF NOT EXISTS vector")
-  .createTableIfNotExists("images", (table) => {
+  .createTableIfNotExists("images_siglip", (table) => {
     table.increments("id");
     table.string("url");
     table.string("camera_id");
-    (table as any).vector("embedding", 512);
+    (table as any).vector("embedding", 768);
     table.timestamps();
   })
   .then(() => {
@@ -68,10 +68,10 @@ const queueimages = async () => {
         if (!result) {
           throw new Error("Failed to save image");
         }
-        const newUrl = new URL(
+        const newUrl = [
+          process.env.IMAGES_BASE_URL as string,
           result.filePath,
-          process.env.IMAGES_BASE_URL as string
-        );
+        ].join("/");
         imageQueue.add(
           "imageProcessor",
           { url: newUrl, cameraId },
@@ -110,6 +110,16 @@ router.post("/embeddings/image", async (req, res) => {
   }
 });
 
+router.post("/embeddings/text", async (req, res) => {
+  try {
+    const { text } = req.body;
+    const embedding = await makeTextEmbedding(text);
+    res.json({ text, embedding });
+  } catch (e: any) {
+    res.status(400).send(e.message);
+  }
+});
+
 // search for images with a text query
 
 function cosineSimilarity(A: number[], B: number[]) {
@@ -137,7 +147,7 @@ router.get("/images", async (req, res) => {
     }
     const results = await db
       .select(["url", "embedding", "created_at", "updated_at"])
-      .from("images")
+      .from("images_siglip")
       .orderBy((db as any).cosineDistance("embedding", textEmbeddings))
       .limit(50);
     // add the cosine distance to the results

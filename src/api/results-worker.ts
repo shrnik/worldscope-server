@@ -25,7 +25,7 @@ async function processor(job: Job) {
     }
 
     await db.transaction(async (trx) => {
-      const existingRecord = await trx("images")
+      const existingRecord = await trx("images_siglip")
         .select("updated_at")
         .where({ camera_id: cameraId })
         .first();
@@ -34,7 +34,7 @@ async function processor(job: Job) {
         !existingRecord ||
         new Date(timestamp) > new Date(existingRecord.updated_at)
       ) {
-        await trx("images")
+        await trx("images_siglip")
           .insert({
             url,
             embedding: embeddingArray,
