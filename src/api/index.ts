@@ -97,7 +97,6 @@ const queueimages = async () => {
 //     await queueimages();
 //   }
 // });
-queueimages();
 router.post("/images", async (req, res) => {
   queueimages();
   res.json({ message: "Images will be queued for embeddings" });
