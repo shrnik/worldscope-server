@@ -15,5 +15,5 @@ export default async function (job: Job): Promise<ImageResult> {
   if (!embedding) {
     throw new Error("Failed to get embedding");
   }
-  return { url, cameraId, embedding: Array.from(embedding) };
+  return { ...job.data, embedding: Array.from(embedding) as number[] };
 }
