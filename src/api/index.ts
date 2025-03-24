@@ -58,13 +58,13 @@ const queueimages = async () => {
       const { filePath, internalPath } = getFilePath(cameraId, url);
       try {
         await saveImage(url, filePath);
-        const newUrl = new URL(
+        const newUrl = [
+          process.env.IMAGES_BASE_URL as string,
           internalPath,
-          process.env.IMAGES_BASE_URL as string
-        );
+        ].join("/");
         imageQueue.add(
           "imageProcessor",
-          { url: newUrl.toString(), cameraId, metadata: extra },
+          { url: newUrl, cameraId, metadata: extra },
           { removeOnComplete: true, deduplication: { id: cameraId.toString() } }
         );
       } catch (e) {
@@ -97,6 +97,8 @@ const queueimages = async () => {
 //     await queueimages();
 //   }
 // });
+
+queueimages();
 router.post("/images", async (req, res) => {
   queueimages();
   res.json({ message: "Images will be queued for embeddings" });
