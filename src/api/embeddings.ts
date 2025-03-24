@@ -41,8 +41,8 @@ async function makeImageEmbedding(imagePath: string) {
   await initialize();
   const image = await RawImage.read(imagePath);
   const imageInputs = await imageProcessor(image);
-  let { pooler_output } = await visionModel(imageInputs);
-  return Array.from(pooler_output.data);
+  let { image_embeds } = await visionModel(imageInputs);
+  return Array.from(image_embeds.data);
 }
 
 export default makeImageEmbedding;

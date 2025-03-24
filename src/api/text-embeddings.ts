@@ -37,8 +37,8 @@ async function makeTextEmbedding(text: string) {
   await initialize();
   try {
     const textInputs = await tokenizer(text);
-    let { pooler_output } = await textModel(textInputs);
-    return Array.from(pooler_output.data) as number[];
+    let { text_embeds } = await textModel(textInputs);
+    return Array.from(text_embeds.data) as number[];
   } catch (e) {
     console.error(e);
   }
