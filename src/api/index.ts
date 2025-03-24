@@ -58,13 +58,13 @@ const queueimages = async () => {
       const { filePath, internalPath } = getFilePath(cameraId, url);
       try {
         await saveImage(url, filePath);
-        const newUrl = [
-          process.env.IMAGES_BASE_URL as string,
+        const newUrl = new URL(
           internalPath,
-        ].join("/");
+          process.env.IMAGES_BASE_URL as string
+        );
         imageQueue.add(
           "imageProcessor",
-          { url: newUrl, cameraId, metadata: extra },
+          { url: newUrl.toString(), cameraId, metadata: extra },
           { removeOnComplete: true, deduplication: { id: cameraId.toString() } }
         );
       } catch (e) {
