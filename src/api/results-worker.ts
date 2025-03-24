@@ -8,9 +8,15 @@ console.log("Worker loaded");
 
 async function processor(job: Job) {
   try {
-    const { url, cameraId, embedding, timestamp, isArchive, imageId } =
-      job.data;
-    console.log(job.data);
+    const {
+      url,
+      cameraId,
+      embedding,
+      timestamp,
+      isArchive,
+      imageId,
+      metadata,
+    } = job.data;
     const embeddingArray = pgVector.toSql(embedding);
     console.time(job.id);
     console.log(job.id, "embedding created");
@@ -41,12 +47,14 @@ async function processor(job: Job) {
             camera_id: cameraId,
             created_at: db.fn.now(),
             updated_at: db.fn.now(),
+            metadata: metadata,
           })
           .onConflict("camera_id")
           .merge({
             embedding: embeddingArray,
             url: url,
             updated_at: db.fn.now(),
+            metadata: metadata,
           });
         console.log(job.id, "inserted into db");
       } else {

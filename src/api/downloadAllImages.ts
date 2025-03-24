@@ -6,24 +6,34 @@ import imageQueue from "./queue";
 import db from "./db";
 import dotenv from "dotenv";
 import path from "path";
+import { CamDataType } from "../types/cameraData";
+import getFaaImages from "../utils/get-faa-images";
 const { sheetUrl } = contants;
 dotenv.config();
 
 const getImages = async () => {
   const res = await axios.get(sheetUrl);
   const [header, ...data] = Object.values(res.data.values) as string[][];
-  const imageMetas = data.map((d, index) => {
+  const imageMetas: CamDataType[] = data.map((d, index) => {
     return {
       url: d[1],
       cameraId: index,
       cameraName: d[0],
+      source: d[2],
+      lat: d[3],
+      lon: d[4],
+      refreshRate: d[5],
     };
   });
-  return imageMetas;
+
+  const nonFaaImages = imageMetas.filter((image) => image.source !== "faa.gov");
+  const faaImages = await getFaaImages();
+
+  return [...nonFaaImages, ...faaImages];
 };
 
 const downloadAllImages = async () => {
-  const images = await getImages();
+  const images: any[] = await getImages();
   await Bluebird.map(
     images.splice(0, 10),
     async (image) => {
@@ -58,3 +68,4 @@ const downloadAllImages = async () => {
 };
 
 export default downloadAllImages;
+export { getImages };

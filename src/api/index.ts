@@ -5,22 +5,27 @@ import pgvector from "pgvector/knex";
 import axios from "axios";
 import Bluebird from "bluebird";
 import constants from "../constants";
+import cosineSimilarity from "../utils/cosine-similarity";
+import { getFilePath } from "../utils/helpers";
 import db from "./db";
-import downloadAll from "./downloader";
-import imageQueue from "./queue";
-import { makeImageEmbedding } from "./embeddings";
-import makeTextEmbedding from "./text-embeddings";
 import { saveImage } from "./download-image";
-import path from "path";
+import downloadAll from "./downloader";
+import { makeImageEmbedding } from "./embeddings";
+import imageQueue from "./queue";
+import makeTextEmbedding from "./text-embeddings";
+import fs from "fs";
+import { getImages } from "./downloadAllImages";
 
 const { sheetUrl } = constants;
 
 const router = express.Router();
 
+const TABLE_NAME = "images_siglip";
+
 // create a table in the database to store the image features using Knex
 db.schema
   .raw("CREATE EXTENSION IF NOT EXISTS vector")
-  .createTableIfNotExists("images_siglip", (table) => {
+  .createTableIfNotExists("TABLE_NAME", (table) => {
     table.increments("id");
     table.string("url");
     table.string("camera_id");
@@ -45,39 +50,37 @@ db.schema
 //   });
 // });
 
-const getImages = async () => {
-  const res = await axios.get(sheetUrl);
-  const [header, ...data] = Object.values(res.data.values) as string[][];
-  const imageMetas = data.map((d, index) => {
-    return {
-      url: d[1],
-      cameraId: index,
-      cameraName: d[0],
-    };
-  });
-  return imageMetas;
-};
-
 const queueimages = async () => {
   const images = await getImages();
   await Bluebird.map(
     images,
-    async ({ url, cameraId }) => {
+    async ({ url, ...extra }, cameraId) => {
+      const { filePath, internalPath } = getFilePath(cameraId, url);
       try {
-        const result = await saveImage(cameraId, url);
-        if (!result) {
-          throw new Error("Failed to save image");
-        }
+        await saveImage(url, filePath);
         const newUrl = [
           process.env.IMAGES_BASE_URL as string,
-          result.filePath,
+          internalPath,
         ].join("/");
         imageQueue.add(
           "imageProcessor",
-          { url: newUrl, cameraId },
+          { url: newUrl, cameraId, metadata: extra },
           { removeOnComplete: true, deduplication: { id: cameraId.toString() } }
         );
       } catch (e) {
+        // remove file if it exists so that there is no stale data
+        if (fs.existsSync(filePath)) {
+          fs.unlink(filePath, (err) => {
+            if (err) {
+              console.error("Error deleting file:", err);
+              return;
+            }
+            console.log("File deleted successfully");
+          });
+        }
+
+        // remove entry for the image from the database
+        await db(TABLE_NAME).where("url", url).del();
         console.error(e);
       }
     },
@@ -94,7 +97,7 @@ const queueimages = async () => {
 //     await queueimages();
 //   }
 // });
-
+queueimages();
 router.post("/images", async (req, res) => {
   queueimages();
   res.json({ message: "Images will be queued for embeddings" });
@@ -120,24 +123,6 @@ router.post("/embeddings/text", async (req, res) => {
   }
 });
 
-// search for images with a text query
-
-function cosineSimilarity(A: number[], B: number[]) {
-  if (A.length !== B.length) throw new Error("A.length !== B.length");
-  let dotProduct = 0,
-    mA = 0,
-    mB = 0;
-  for (let i = 0; i < A.length; i++) {
-    dotProduct += A[i] * B[i];
-    mA += A[i] * A[i];
-    mB += B[i] * B[i];
-  }
-  mA = Math.sqrt(mA);
-  mB = Math.sqrt(mB);
-  let similarity = dotProduct / (mA * mB);
-  return similarity;
-}
-
 router.get("/images", async (req, res) => {
   const { query } = req.query;
   try {
@@ -146,8 +131,8 @@ router.get("/images", async (req, res) => {
       throw new Error("Invalid query");
     }
     const results = await db
-      .select(["url", "embedding", "created_at", "updated_at"])
-      .from("images_siglip")
+      .select(["url", "embedding", "created_at", "updated_at", "metadata"])
+      .from(TABLE_NAME)
       .orderBy((db as any).cosineDistance("embedding", textEmbeddings))
       .limit(50);
     // add the cosine distance to the results

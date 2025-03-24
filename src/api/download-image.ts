@@ -3,6 +3,7 @@
 import { RawImage } from "@huggingface/transformers";
 import * as fs from "fs";
 import * as path from "path";
+import { isValidExt } from "../utils/helpers";
 
 async function downloadImage(
   cameraId: number | string,
@@ -31,34 +32,14 @@ async function downloadImage(
     // save the path to the database
     return { cameraId, url, timestamp, filePath: filePath.split("images/")[1] };
   } catch (e) {
+    // delete the file in that location
     console.error(e);
   }
 }
 
-const isValidExt = (ext?: string) =>
-  ext && ["jpg", "jpeg", "png", "gif"].includes(ext);
-
-async function saveImage(cameraId: number | string, url: string) {
-  try {
-    const rawImage = await RawImage.fromURL(url);
-    const timestamp = new Date().toISOString();
-    const tempExt = url.split(".").pop();
-    const ext = isValidExt(tempExt) ? tempExt : "jpg";
-
-    // Create a folder structure based on the cameraId and timestamp
-    // path looks like: images/YYYY-MM-DD/hour/cameraId/timestamp.jpg
-    const internalPath = path.join(cameraId.toString());
-    const folderPath = path.resolve(__dirname, "../..", "images", internalPath);
-    fs.mkdirSync(folderPath, { recursive: true });
-
-    // Save the image to the folder
-    const filePath = path.join(folderPath, `default.${ext}`);
-    await rawImage.save(filePath);
-    // save the path to the database
-    return { cameraId, url, timestamp, filePath: filePath.split("images/")[1] };
-  } catch (e) {
-    console.error(e);
-  }
+async function saveImage(url: string, filePath: string) {
+  const rawImage = await RawImage.fromURL(url);
+  await rawImage.save(filePath);
 }
 export default downloadImage;
-export { downloadImage, saveImage };
+export { downloadImage, saveImage, isValidExt };
