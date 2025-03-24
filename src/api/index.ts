@@ -16,8 +16,6 @@ import makeTextEmbedding from "./text-embeddings";
 import fs from "fs";
 import { getImages } from "./downloadAllImages";
 
-const { sheetUrl } = constants;
-
 const router = express.Router();
 
 const TABLE_NAME = "images";
@@ -53,7 +51,7 @@ db.schema
 const queueimages = async () => {
   const images = await getImages();
   await Bluebird.map(
-    images,
+    images.filter((image) => image.url),
     async ({ url, ...extra }, cameraId) => {
       const { filePath, internalPath } = getFilePath(cameraId, url);
       try {
@@ -62,6 +60,7 @@ const queueimages = async () => {
           process.env.IMAGES_BASE_URL as string,
           internalPath,
         ].join("/");
+        console.log("queued image", cameraId);
         imageQueue.add(
           "imageProcessor",
           { url: newUrl, cameraId, metadata: extra },
@@ -98,7 +97,6 @@ const queueimages = async () => {
 //   }
 // });
 
-queueimages();
 router.post("/images", async (req, res) => {
   queueimages();
   res.json({ message: "Images will be queued for embeddings" });
