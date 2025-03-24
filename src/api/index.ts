@@ -20,7 +20,7 @@ const { sheetUrl } = constants;
 
 const router = express.Router();
 
-const TABLE_NAME = "images_siglip";
+const TABLE_NAME = "images";
 
 // create a table in the database to store the image features using Knex
 db.schema

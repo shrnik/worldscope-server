@@ -1,7 +1,6 @@
 import {
   AutoProcessor,
   CLIPVisionModelWithProjection,
-  SiglipVisionModel,
   PreTrainedModel,
   Processor,
   RawImage,
@@ -16,7 +15,7 @@ let isLoaded = false;
 let isLoading = false;
 let loadPromise: Promise<void> | null = null;
 
-const MODEL = "Xenova/siglip-base-patch16-224";
+const MODEL = "Xenova/clip-vit-base-patch16";
 
 async function initialize() {
   if (isLoaded) return;
@@ -26,7 +25,7 @@ async function initialize() {
   loadPromise = (async () => {
     try {
       imageProcessor = await AutoProcessor.from_pretrained(MODEL, {});
-      visionModel = await SiglipVisionModel.from_pretrained(MODEL);
+      visionModel = await CLIPVisionModelWithProjection.from_pretrained(MODEL);
       isLoaded = true;
     } finally {
       isLoading = false;

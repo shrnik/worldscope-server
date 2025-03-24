@@ -1,7 +1,6 @@
 import {
   AutoTokenizer,
   CLIPTextModelWithProjection,
-  SiglipTextModel,
   PreTrainedModel,
   PreTrainedTokenizer,
 } from "@huggingface/transformers";
@@ -13,7 +12,7 @@ let isLoaded = false;
 let isLoading = false;
 let loadPromise: Promise<void> | null = null;
 
-const MODEL = "Xenova/siglip-base-patch16-224";
+const MODEL = "Xenova/clip-vit-base-patch16";
 async function initialize() {
   if (isLoaded) return;
   if (isLoading) return loadPromise;
@@ -22,7 +21,7 @@ async function initialize() {
   loadPromise = (async () => {
     try {
       tokenizer = await AutoTokenizer.from_pretrained(MODEL);
-      textModel = await SiglipTextModel.from_pretrained(MODEL);
+      textModel = await CLIPTextModelWithProjection.from_pretrained(MODEL);
       isLoaded = true;
     } finally {
       isLoading = false;
