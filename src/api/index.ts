@@ -64,7 +64,15 @@ const queueimages = async () => {
         imageQueue.add(
           "imageProcessor",
           { url: newUrl, cameraId, metadata: extra },
-          { removeOnComplete: true, deduplication: { id: cameraId.toString() } }
+          {
+            removeOnComplete: true,
+            deduplication: { id: cameraId.toString() },
+            attempts: 3,
+            backoff: {
+              type: "exponential",
+              delay: 10000,
+            },
+          }
         );
       } catch (e) {
         // remove file if it exists so that there is no stale data
