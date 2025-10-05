@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+python-dotenv
+requests
+SQLAlchemy
+psycopg2-binary
+pgvector
+transformers
+torch
+Pillow
+celery
+redis
+schedule
+APScheduler
+flake8
+pytest
+requests
