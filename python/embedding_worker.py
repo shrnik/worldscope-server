@@ -16,7 +16,7 @@ from contrail_classifier import ContrailClassifier
 # from redis_connection import connection
 
 print("Worker loaded")
-model = CLIPVisionModelWithProjection.from_pretrained("openai/clip-vit-base-patch16")
+model = CLIPVisionModelWithProjection.from_pretrained("openai/clip-vit-base-patch16", device_map="auto")
 processor = AutoProcessor.from_pretrained("openai/clip-vit-base-patch16")
 
 def get_features_and_embeddings(images: PILImage.Image):
