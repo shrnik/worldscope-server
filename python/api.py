@@ -89,7 +89,8 @@ def get_images(query: str, db: Session = Depends(get_db)):
             "id": row[0].id,
             "url": row[0].url,
             "camera_id": row[0].camera_id,
-            "distance": 1 - float(row[1]),
+            "cosineDistance": 1 - float(row[1]),
+            "cameraData": row[0].camera_data
         }
         for row in results
     ]
