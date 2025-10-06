@@ -65,8 +65,8 @@ async def image_processor(job, job_id: str) -> None:
             try:
                 # Get the corresponding features and embeddings
                 mapped_idx = image_index_map.get(idx)
-                image_feature = pooler_output[mapped_idx].detach().numpy().tolist()
-                image_embedding = image_embeds[mapped_idx].detach().numpy().tolist()
+                image_feature = pooler_output[mapped_idx].detach().cpu().numpy().tolist()
+                image_embedding = image_embeds[mapped_idx].detach().cpu().numpy().tolist()
 
                 # Classify contrail presence
                 contrail_present = classifier.predict(image_feature)
