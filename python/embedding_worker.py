@@ -1,12 +1,8 @@
-import os
-import ssl
 import time
 import datetime
-from typing import Dict, Any
 import asyncio
-from bullmq import Worker, Job
-from sqlalchemy.orm import Session
-import db, redis_connection
+from bullmq import Worker
+import redis_connection
 import signal
 from transformers import AutoProcessor, CLIPVisionModelWithProjection
 from PIL import Image as PILImage
@@ -21,7 +17,7 @@ from contrail_classifier import ContrailClassifier
 # from redis_connection import connection
 
 print("Worker loaded")
-model = CLIPVisionModelWithProjection.from_pretrained("openai/clip-vit-base-patch16")
+model = CLIPVisionModelWithProjection.from_pretrained("openai/clip-vit-base-patch16", device_map="auto")
 processor = AutoProcessor.from_pretrained("openai/clip-vit-base-patch16")
 
 def get_features_and_embeddings(images: PILImage.Image):
@@ -40,8 +36,6 @@ async def image_processor(job, job_id: str) -> None:
         print(f"{job_id} processing {job.data}")
         image_url = job.data['url']
         image = load_image(image_url)
-        inputs = processor(images=image, return_tensors="pt")
-
         image_embeds, pooler_output = get_features_and_embeddings(image)
         #  add to results queue
         image_features = pooler_output.tolist()[0]
@@ -66,7 +60,7 @@ async def image_processor(job, job_id: str) -> None:
         
 
 
-def on_completed(job_id: str, result: Any) -> None:
+def on_completed(job_id: str, result) -> None:
     """Callback when worker completes a job."""
     print("worker completed")
     print(f"Result: {result}")

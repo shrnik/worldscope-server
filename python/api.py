@@ -39,7 +39,7 @@ def read_root():
 @router.get("/queue_images")
 async def queue_all_images():
     images = await get_all_images()
-    # await image_processing_queue.obliterate(force=1)
+
     async def download_and_save_image(img):
         file_path, internal_path = get_file_path(img['cameraId'], img['url'])
         save_image_to_path(img['url'], file_path)
@@ -50,19 +50,20 @@ async def queue_all_images():
             "url": local_url,
         }, {"removeOnComplete": True})
         print(f"Saved image {img['cameraId']} to {file_path}")
-    
+
     async def process_images():
         semaphore = asyncio.Semaphore(20)  # Limit concurrency to 20
 
         async def bounded_download(img):
             async with semaphore:
                 await download_and_save_image(img)
-        
-        tasks = [bounded_download(img) for img in images[:10]]
+
+        tasks = [bounded_download(img) for img in images[:1000]]
         await asyncio.gather(*tasks)
-    
-    await process_images()
-    await image_processing_queue.close()
+
+    # Run processing in background without blocking response
+    asyncio.create_task(process_images())
+
     return {"message": f"Queued {len(images)} images for processing"}
 
 def get_text_embedding(text: str):
@@ -90,6 +91,7 @@ def get_images(query: str, db: Session = Depends(get_db)):
             "url": row[0].url,
             "camera_id": row[0].camera_id,
             "cosineDistance": 1 - float(row[1]),
+            "updated_at": row[0].updated_at,
             "cameraData": row[0].camera_data
         }
         for row in results
