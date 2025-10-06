@@ -21,6 +21,8 @@ processor = AutoProcessor.from_pretrained("openai/clip-vit-base-patch16")
 
 def get_features_and_embeddings(images: PILImage.Image):
     inputs = processor(images=images, return_tensors="pt")
+    # Move inputs to the same device as the model
+    inputs = {k: v.to(model.device) for k, v in inputs.items()}
     outputs = model(**inputs)
     image_embeds = outputs.image_embeds
     pooler_output = outputs.last_hidden_state[:, 0, :]
