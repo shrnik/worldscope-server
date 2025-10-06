@@ -75,9 +75,12 @@ starlette==0.48.0
 sympy==1.14.0
 threadpoolctl==3.6.0
 tokenizers==0.22.1
-torch==2.8.0
 tqdm==4.67.1
-transformers==4.57.0
+torch>=2.0.0
+transformers>=4.30.0
+Pillow>=9.0.0
+chromadb>=0.4.0
+numpy>=1.24.0
 typer==0.19.2
 typing-inspection==0.4.2
 typing_extensions==4.15.0

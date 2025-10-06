@@ -17,7 +17,7 @@ text_model = CLIPTextModelWithProjection.from_pretrained("openai/clip-vit-base-p
 text_tokenizer = AutoTokenizer.from_pretrained("openai/clip-vit-base-patch16")
 
 router = APIRouter()
-BASE_URL = "http://localhost:5001/images"
+BASE_URL = "https://api.worldscope.live/images"
 
 class TextEmbeddingRequest(BaseModel):
     text: str
@@ -42,23 +42,39 @@ async def queue_all_images():
 
     async def download_and_save_image(img):
         file_path, internal_path = get_file_path(img['cameraId'], img['url'])
-        save_image_to_path(img['url'], file_path)
+        # save_image_to_path(img['url'], file_path)
         local_url = make_url_absolute(BASE_URL, internal_path)
-        await image_processing_queue.add("imageProcessor", {
+        return {
             **img,
-            "original": img['url'],
             "url": local_url,
-        }, {"removeOnComplete": True})
-        print(f"Saved image {img['cameraId']} to {file_path}")
-
+            "original_url": img['url']
+        }
     async def process_images():
         semaphore = asyncio.Semaphore(20)  # Limit concurrency to 20
 
-        async def bounded_download(img):
+        async def download_and_queue_batch(batch):
             async with semaphore:
-                await download_and_save_image(img)
+                # Download all images in the batch
+                downloaded_images = []
+                for img in batch:
+                    try:
+                        downloaded_img = await download_and_save_image(img)
+                        downloaded_images.append(downloaded_img)
+                    except Exception as e:
+                        print(f"Error downloading image {img['url']}: {e}")
 
-        tasks = [bounded_download(img) for img in images[:1000]]
+                # Add the batch as a single job to the queue
+                if downloaded_images:
+                    print(f"Queueing batch of {len(downloaded_images)} images")
+                    await image_processing_queue.add("imageProcessor", {
+                        "images": downloaded_images
+                    }, {"removeOnComplete": True, "removeOnFail": True})
+
+        # Create batches of 16 images
+        batch_size = 16
+        image_batches = [images[i:i + batch_size] for i in range(0, len(images[:1000]), batch_size)]
+
+        tasks = [download_and_queue_batch(batch) for batch in image_batches]
         await asyncio.gather(*tasks)
 
     # Run processing in background without blocking response
@@ -98,13 +114,23 @@ def get_images(query: str, db: Session = Depends(get_db)):
     ]
 
 
-@router.get("/images")
-def get_contrail_images(threshold: float , db: Session = Depends(get_db)):
-    query_vector = text_embedding
+@router.get("/contrails-images")
+def get_contrail_images(threshold: float = 0.5, db: Session = Depends(get_db)):
     results = db.execute(
         select(DBImage)
+        .where(DBImage.contrail_probability >= threshold)
         .order_by(DBImage.contrail_probability)
         .limit(100)
     ).all()
-    return results
+    return [
+        {
+            "id": row[0].id,
+            "url": row[0].url,
+            "camera_id": row[0].camera_id,
+            "updated_at": row[0].updated_at,
+            "cameraData": row[0].camera_data,
+            "contrail_probability": row[0].contrail_probability
+        }
+        for row in results
+    ]
 main = router

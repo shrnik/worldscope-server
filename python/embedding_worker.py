@@ -7,7 +7,6 @@ import signal
 from transformers import AutoProcessor, CLIPVisionModelWithProjection
 from PIL import Image as PILImage
 from queues import results_queue
-import requests
 from transformers.image_utils import load_image
 from contrail_classifier import ContrailClassifier
 # Import dependencies (you'll need to convert/install these)
@@ -17,13 +16,11 @@ from contrail_classifier import ContrailClassifier
 # from redis_connection import connection
 
 print("Worker loaded")
-model = CLIPVisionModelWithProjection.from_pretrained("openai/clip-vit-base-patch16", device_map="auto")
+model = CLIPVisionModelWithProjection.from_pretrained("openai/clip-vit-base-patch16")
 processor = AutoProcessor.from_pretrained("openai/clip-vit-base-patch16")
 
 def get_features_and_embeddings(images: PILImage.Image):
     inputs = processor(images=images, return_tensors="pt")
-    # Move inputs to the same device as the model
-    inputs = {k: v.to(model.device) for k, v in inputs.items()}
     outputs = model(**inputs)
     image_embeds = outputs.image_embeds
     pooler_output = outputs.last_hidden_state[:, 0, :]
@@ -35,28 +32,58 @@ classifier = ContrailClassifier()
 async def image_processor(job, job_id: str) -> None:
     start_time = time.time()
     try:
-        print(f"{job_id} processing {job.data}")
-        image_url = job.data['url']
-        image = load_image(image_url)
-        image_embeds, pooler_output = get_features_and_embeddings(image)
-        #  add to results queue
-        image_features = pooler_output.tolist()[0]
-        contrail_prob = classifier.predict(image_features)
-        embedding = image_embeds.data.tolist()[0]
-        await results_queue.add("resultsProcessor", {
-            # spread the job data
-            **job.data,
-            "embedding": embedding,
-            "image_features": image_features,
-            "timestamp": datetime.datetime.now(datetime.UTC).timestamp(),
-            "contrail_probability": contrail_prob,
-        }, {"removeOnComplete": True, "removeOnFail": True})
-        # Store in database
-        print(f"{job_id} processed")
+        images_data = job.data.get('images', [])
+        print(f"{job_id} processing batch of {len(images_data)} images")
+
+        # Process each image in the batch
+        images = []
+        image_index_map = {}  # Maps image index to original images_data index
+        async def load_single_image(idx, img_data):
+            try:
+                image_url = img_data['url']
+                image = await asyncio.to_thread(load_image, image_url)
+                return (idx, image)
+            except Exception as e:
+                print(f"Error loading image {img_data.get('url', 'unknown')}: {e}")
+                return (idx, None)
+
+        # Load all images concurrently
+        load_tasks = [load_single_image(idx, img_data) for idx, img_data in enumerate(images_data)]
+        load_results = await asyncio.gather(*load_tasks)
+
+        # Build images list and index map
+        for idx, image in load_results:
+            if image is not None:
+                image_index_map[idx] = len(images)
+                images.append(image)
+
+        # Get features and embeddings for all images in the batch
+        image_embeds, pooler_output = get_features_and_embeddings(images)
+        for idx, img_data in enumerate(images_data):
+            try:
+                # Get the corresponding features and embeddings
+                mapped_idx = image_index_map.get(idx)
+                image_feature = pooler_output[mapped_idx].detach().numpy().tolist()
+                image_embedding = image_embeds[mapped_idx].detach().numpy().tolist()
+
+                # Classify contrail presence
+                contrail_present = classifier.predict(image_feature)
+
+                # Store results in the results queue
+                await results_queue.add("resultsQueue", {
+                    **img_data,
+                    "timestamp": datetime.datetime.now(datetime.UTC).timestamp(),
+                    "image_features": image_feature,
+                    "embedding": image_embedding,
+                    "contrail_probability": contrail_present
+                }, {"removeOnComplete": True})
+            except Exception as e:
+                print(f"Error processing image {img_data.get('url', 'unknown')}: {e}")
+
+        print(f"{job_id} batch processed")
     except Exception as e:
         print(f"Error processing job {job_id}: {e}")
     finally:
-        # await results_queue.close()
         elapsed_time = (time.time() - start_time) * 1000  # Convert to ms
         print(f"{job_id}: {elapsed_time:.2f}ms")
         

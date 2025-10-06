@@ -52,6 +52,6 @@ async def get_images() -> List[CamDataType]:
             print(f"Skipping row {index} due to missing data: {row}")
 
     non_faa_images = [image for image in image_metas if image["source"] != "faa.gov"]
-    # faa_images = get_faa_images()
+    faa_images = get_faa_images()
 
-    return [*non_faa_images]
+    return [*non_faa_images, *faa_images]
