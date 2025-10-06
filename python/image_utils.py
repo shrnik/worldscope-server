@@ -54,4 +54,8 @@ async def get_images() -> List[CamDataType]:
     non_faa_images = [image for image in image_metas if image["source"] != "faa.gov"]
     faa_images = get_faa_images()
 
-    return [*non_faa_images, *faa_images]
+    all_images = [*non_faa_images, *faa_images]
+    # camera_id is index
+    for i, img in enumerate(all_images):
+        img["cameraId"] = i
+    return all_images

@@ -23,7 +23,17 @@ def get_database_url():
 DATABASE_URL = get_database_url()
 print(f"Connecting to database at {DATABASE_URL}")
 
-engine = create_engine(DATABASE_URL)
+engine = create_engine(
+    DATABASE_URL,
+    pool_size=10,
+    max_overflow=20,
+    pool_pre_ping=True,  # Verify connections before using them
+    pool_recycle=3600,   # Recycle connections after 1 hour
+    connect_args={
+        "connect_timeout": 10,
+        "options": "-c statement_timeout=30000"  # 30 second query timeout
+    }
+)
 session = Session(engine)
 Base = declarative_base()
 
@@ -59,6 +69,25 @@ def create_db_and_tables():
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         conn.commit()
     Base.metadata.create_all(bind=engine)
+
+    # Create vector index for faster similarity searches
+    with engine.connect() as conn:
+        # Check if index exists
+        result = conn.execute(text("""
+            SELECT EXISTS (
+                SELECT 1 FROM pg_indexes
+                WHERE indexname = 'images_v2_embedding_idx'
+            );
+        """))
+        if not result.scalar():
+            print("Creating vector index on embedding column...")
+            conn.execute(text("""
+                CREATE INDEX images_v2_embedding_idx
+                ON images_v2
+                USING hnsw (embedding vector_cosine_ops);
+            """))
+            conn.commit()
+            print("Vector index created successfully")
 
 # export the connection and session
 db = engine

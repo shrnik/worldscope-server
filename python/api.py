@@ -71,8 +71,8 @@ async def queue_all_images():
                     }, {"removeOnComplete": True, "removeOnFail": True})
 
         # Create batches of 16 images
-        batch_size = 16
-        image_batches = [images[i:i + batch_size] for i in range(0, len(images[:1000]), batch_size)]
+        batch_size = 32
+        image_batches = [images[i:i + batch_size] for i in range(0, len(images), batch_size)]
 
         tasks = [download_and_queue_batch(batch) for batch in image_batches]
         await asyncio.gather(*tasks)
