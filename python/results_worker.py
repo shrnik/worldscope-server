@@ -26,6 +26,7 @@ async def processor(job, job_id: str) -> None:
         camera_id = job.data.get("cameraId")
         embedding = job.data.get("embedding")
         timestamp = job.data.get("timestamp")
+        image_features = job.data.get("image_features")
         # image_id = job.data.get("imageId")
         # metadata = job.get("metadata")
         camera_data = {
@@ -38,7 +39,7 @@ async def processor(job, job_id: str) -> None:
         }
 
         # Convert embedding to SQL format
-        embedding_array = embedding[0]
+
         print(f"{job_id} embedding created")
         # Process regular image
         # Use regular transaction pattern instead of async context manager
@@ -46,24 +47,26 @@ async def processor(job, job_id: str) -> None:
         try:
             # Check if existing record exists using the ORM
             existing_record = session.query(db.Image).filter_by(camera_id=str(camera_id)).first()
-
+            updated_at = datetime.fromtimestamp(timestamp) if timestamp else datetime.now()
             # Only update if no existing record or new timestamp is more recent
-            if not existing_record or datetime.fromisoformat(timestamp) > existing_record.updated_at:
+            if not existing_record or updated_at > existing_record.updated_at:
                 if existing_record:
                     # Update existing record
                     existing_record.url = url
-                    existing_record.embedding = embedding_array
-                    existing_record.updated_at = timestamp
+                    existing_record.embedding = embedding
+                    existing_record.updated_at = updated_at 
                     existing_record.camera_data = camera_data
                 else:
                     # Create new record
                     new_image = db.Image(
                         url=url,
-                        embedding=embedding_array,
-                        camera_id=str(camera_id)    ,
+                        embedding=embedding,
+                        image_features=image_features,
+                        camera_id=str(camera_id),
                         created_at=datetime.now(),
-                        updated_at=timestamp,
-                        camera_data=camera_data
+                        updated_at=updated_at,
+                        camera_data=camera_data,
+                        contrail_probability=job.data.get("contrail_probability", 0)
                     )
                     session.add(new_image)
                 

@@ -13,6 +13,7 @@ from PIL import Image as PILImage
 from queues import results_queue
 import requests
 from transformers.image_utils import load_image
+from contrail_classifier import ContrailClassifier
 # Import dependencies (you'll need to convert/install these)
 # from bullmq import Worker, Job  # Python equivalent: arq, rq, or celery
 # import pgvector  # Python pgvector library
@@ -20,8 +21,18 @@ from transformers.image_utils import load_image
 # from redis_connection import connection
 
 print("Worker loaded")
-model = CLIPVisionModelWithProjection.from_pretrained("openai/clip-vit-base-patch32")
-processor = AutoProcessor.from_pretrained("openai/clip-vit-base-patch32")
+model = CLIPVisionModelWithProjection.from_pretrained("openai/clip-vit-base-patch16")
+processor = AutoProcessor.from_pretrained("openai/clip-vit-base-patch16")
+
+def get_features_and_embeddings(images: PILImage.Image):
+    inputs = processor(images=images, return_tensors="pt")
+    outputs = model(**inputs)
+    image_embeds = outputs.image_embeds
+    pooler_output = outputs.last_hidden_state[:, 0, :]
+    pooler_output = model.vision_model.post_layernorm(pooler_output)
+    return image_embeds, pooler_output
+
+classifier = ContrailClassifier()
 
 async def image_processor(job, job_id: str) -> None:
     start_time = time.time()
@@ -30,14 +41,19 @@ async def image_processor(job, job_id: str) -> None:
         image_url = job.data['url']
         image = load_image(image_url)
         inputs = processor(images=image, return_tensors="pt")
-        outputs = model(**inputs)
-        embeddings = outputs.image_embeds.data.tolist()
+
+        image_embeds, pooler_output = get_features_and_embeddings(image)
         #  add to results queue
+        image_features = pooler_output.tolist()[0]
+        contrail_prob = classifier.predict(image_features)
+        embedding = image_embeds.data.tolist()[0]
         await results_queue.add("resultsProcessor", {
             # spread the job data
             **job.data,
-            "embedding": embeddings,
-            "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
+            "embedding": embedding,
+            "image_features": image_features,
+            "timestamp": datetime.datetime.now(datetime.UTC).timestamp(),
+            "contrail_probability": contrail_prob,
         }, {"removeOnComplete": True, "removeOnFail": True})
         # Store in database
         print(f"{job_id} processed")

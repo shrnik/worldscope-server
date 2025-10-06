@@ -1,18 +1,20 @@
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from transformers import CLIPTextModel, CLIPTokenizer
+from transformers import CLIPTextModelWithProjection, AutoTokenizer
 from PIL import Image
 import requests
 from sqlalchemy.orm import Session
-from db import SessionLocal, Image as DBImage
+from sqlalchemy import select
+from db import engine, Image as DBImage
 from utils.get_faa_images import get_faa_images
 from image_utils import get_images as get_all_images
 from utils.helpers import get_file_path, save_image_to_path, make_url_absolute
 from queues import image_processing_queue
 import asyncio
 
-text_model = CLIPTextModel.from_pretrained("openai/clip-vit-base-patch32")
-text_tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
+
+text_model = CLIPTextModelWithProjection.from_pretrained("openai/clip-vit-base-patch16")
+text_tokenizer = AutoTokenizer.from_pretrained("openai/clip-vit-base-patch16")
 
 router = APIRouter()
 BASE_URL = "http://localhost:5001/images"
@@ -24,11 +26,11 @@ class ImageEmbeddingRequest(BaseModel):
     url: str
 
 def get_db():
-    db = SessionLocal()
     try:
-        yield db
+        session = Session(engine)
+        yield session
     finally:
-        db.close()
+        session.close()
 
 @router.get("/")
 def read_root():
@@ -66,7 +68,7 @@ async def queue_all_images():
 def get_text_embedding(text: str):
     inputs = text_tokenizer(text, return_tensors="pt", padding=True, truncation=True)
     outputs = text_model(**inputs)
-    embeddings = outputs.last_hidden_state[:, 0, :].detach().numpy()
+    embeddings = outputs.text_embeds.data.tolist()
     return embeddings[0]    
 
 @router.get("/images")
@@ -75,10 +77,31 @@ def get_images(query: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Invalid query")
 
     text_embedding = get_text_embedding(query)
+    query_vector = text_embedding
+    results = db.execute(
+        select(DBImage, DBImage.embedding.cosine_distance(query_vector).label('distance'))
+        .order_by('distance')
+        .limit(100)
+    ).all()
 
-    # The l2_distance operator is used for similarity search with pgvector
-    results = db.query(DBImage).order_by(DBImage.embedding.l2_distance(text_embedding)).limit(50).all()
-    
+    return [
+        {
+            "id": row[0].id,
+            "url": row[0].url,
+            "camera_id": row[0].camera_id,
+            "distance": 1 - float(row[1]),
+        }
+        for row in results
+    ]
+
+
+@router.get("/images")
+def get_contrail_images(threshold: float , db: Session = Depends(get_db)):
+    query_vector = text_embedding
+    results = db.execute(
+        select(DBImage)
+        .order_by(DBImage.contrail_probability)
+        .limit(100)
+    ).all()
     return results
-
 main = router

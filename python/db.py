@@ -1,6 +1,6 @@
 import os
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Column, Integer, String, DateTime, Float
 from pgvector.sqlalchemy import Vector
@@ -24,7 +24,7 @@ DATABASE_URL = get_database_url()
 print(f"Connecting to database at {DATABASE_URL}")
 
 engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+session = Session(engine)
 Base = declarative_base()
 
 class Image(Base):
@@ -33,12 +33,15 @@ class Image(Base):
     id = Column(Integer, primary_key=True, index=True)
     url = Column(String)
     camera_id = Column(String, unique=True)
-    embedding = Column(Vector(768))
+    embedding = Column(Vector(512))  # Adjust dimension as needed
+    image_features = Column(Vector(768))  # Adjust dimension as needed
     created_at = Column(DateTime, server_default=text('now()'))
     updated_at = Column(DateTime, server_default=text('now()'), onupdate=text('now()'))
     camera_data = Column(JSONB)
-    contrail_probability = Column(Float, nullable=True)
+    contrail_probability = Column(Float, nullable=True, default=0)
 
+    def as_dict(self):
+        return {c.name: getattr(self, c.name) for c in self.__table__.columns}
 
 def check_tables_exist():
     with engine.connect() as conn:
