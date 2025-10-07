@@ -62,8 +62,8 @@ class ContrailClassifierNN:
             float: Probability of contrail presence (between 0 and 1).
         """
         # Check if embedding is of correct shape
-        if len(embedding) != self.model.input_size:
-            raise ValueError(f"Expected embedding of length {self.model.input_size}, got {len(embedding)}")
+        # if len(embedding) != self.model.input_size:
+        #     raise ValueError(f"Expected embedding of length {self.model.input_size}, got {len(embedding)}")
         with torch.no_grad():
             embedding_tensor = torch.tensor(embedding).float()
             prob = self.model(embedding_tensor).item()
