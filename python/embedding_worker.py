@@ -8,7 +8,7 @@ from transformers import AutoProcessor, CLIPVisionModelWithProjection
 from PIL import Image as PILImage
 from queues import results_queue
 from transformers.image_utils import load_image
-from contrail_classifier import ContrailClassifier
+from contrail_classifier import ContrailClassifier, ContrailClassifierNN
 # Import dependencies (you'll need to convert/install these)
 # from bullmq import Worker, Job  # Python equivalent: arq, rq, or celery
 # import pgvector  # Python pgvector library
@@ -29,7 +29,7 @@ def get_features_and_embeddings(images: PILImage.Image):
     pooler_output = model.vision_model.post_layernorm(pooler_output)
     return image_embeds, pooler_output
 
-classifier = ContrailClassifier()
+classifier = ContrailClassifierNN()
 
 async def image_processor(job, job_id: str) -> None:
     start_time = time.time()
@@ -65,6 +65,10 @@ async def image_processor(job, job_id: str) -> None:
             try:
                 # Get the corresponding features and embeddings
                 mapped_idx = image_index_map.get(idx)
+                if mapped_idx is None:
+                    print(f"Skipping image {img_data.get('url', 'unknown')}: failed to load")
+                    continue
+
                 image_feature = pooler_output[mapped_idx].detach().cpu().numpy().tolist()
                 image_embedding = image_embeds[mapped_idx].detach().cpu().numpy().tolist()
 
