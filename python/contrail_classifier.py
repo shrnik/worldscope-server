@@ -45,7 +45,7 @@ class BinaryClassifier(nn.Module):
         return self.classifier(x)
 
 class ContrailClassifierNN:
-    def __init__(self, model_path='python/models/simple_nn_contrails.pth'):
+    def __init__(self, model_path='python/models/simple_nn_contrailsv2.pth'):
         # Load the neural network model from the specified path
         self.model = BinaryClassifier(768, 256)  # Assuming input dimension is 768
         self.model.load_state_dict(torch.load(model_path))
