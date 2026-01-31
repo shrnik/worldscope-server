@@ -138,15 +138,16 @@ router.get("/images", async (req, res) => {
       throw new Error("Invalid query");
     }
     const results = await db
-      .select(["url", "embedding", "created_at", "updated_at", "metadata"])
+      .select(["url", "created_at", "updated_at", "metadata", db.raw("embedding <=> ? as cosine_distance", [pgvector.toSql(textEmbeddings)])])
       .from(TABLE_NAME)
       .orderBy((db as any).cosineDistance("embedding", textEmbeddings))
-      .limit(50);
     // add the cosine distance to the results
-    results.forEach((result) => {
-      const imageEmbeddings = pgvector.fromSql(result.embedding);
-      result.cosineDistance = cosineSimilarity(textEmbeddings, imageEmbeddings);
+    results.forEach((result: any) => {
+      result.cosineDistance = 1 - result.cosine_distance;
+      delete result.cosine_distance;
+      delete result.embedding;
     });
+    console.log("results", results.length);
     res.json(results);
   } catch (e: any) {
     res.status(400).send(e.message);
