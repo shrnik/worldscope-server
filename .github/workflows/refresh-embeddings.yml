@@ -1,0 +1,44 @@
+name: Refresh embeddings
+
+# Sequential HF Jobs pipeline: download (CPU) -> embed (GPU), run on demand.
+# The GitHub runner is just a cheap orchestrator; the actual compute is the HF Job each
+# stage submits (with its own --flavor). `needs:` enforces "embed runs only if download
+# succeeded".
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: refresh-embeddings
+  cancel-in-progress: false
+
+env:
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  FAA_API_KEY: ${{ secrets.FAA_API_KEY }}
+  HF_BUCKET: ${{ vars.HF_BUCKET || 'shrnik/worldscope' }}
+  HF_DOWNLOAD_FLAVOR: cpu-upgrade
+  HF_EMBED_FLAVOR: t4-small
+  PYTHONPATH: .
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Download snapshots -> bucket (HF cpu-upgrade job)
+        run: >-
+          uv run --no-project --with huggingface_hub --with pydantic-settings
+          python scripts/download_images.py
+
+  embed:
+    needs: download          # only runs if download succeeded
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Compute embeddings (HF t4 job)
+        run: >-
+          uv run --no-project --with huggingface_hub --with pydantic-settings
+          python scripts/refresh_embeddings.py

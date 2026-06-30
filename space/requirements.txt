@@ -1,0 +1,7 @@
+gradio>=5.0
+transformers>=4.46
+torch>=2.4
+numpy>=2.0
+pandas>=2.2
+pyarrow>=18.0
+httpx>=0.28
