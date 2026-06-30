@@ -6,5 +6,6 @@ dist
 public/images
 images
 python/.venv/
+.venv/
 **/__pycache__/
 node_modules/
