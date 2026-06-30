@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     hf_endpoint: str = "https://huggingface.co"
     hf_download_flavor: str = "cpu-upgrade"
     hf_embed_flavor: str = "t4-small"
+    hf_cleanup_flavor: str = "cpu-basic"
     hf_job_timeout: str = "1h"
 
     # CLIP model (same checkpoint used by the server and the job)

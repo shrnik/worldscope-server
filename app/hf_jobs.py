@@ -28,6 +28,7 @@ _TOKEN = settings.hf_token or None
 _JOBS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "jobs")
 _DOWNLOAD_SCRIPT = os.path.join(_JOBS_DIR, "download_job.py")
 _EMBED_SCRIPT = os.path.join(_JOBS_DIR, "embed_job.py")
+_CLEANUP_SCRIPT = os.path.join(_JOBS_DIR, "cleanup_job.py")
 
 _TERMINAL_STAGES = {"COMPLETED", "ERROR", "CANCELED", "DELETED"}
 
@@ -71,6 +72,20 @@ def trigger_embedding_job() -> str:
         token=_TOKEN,
     )
     logger.info("Triggered embedding job %s (%s)", job.id, job.url)
+    return job.id
+
+
+def trigger_cleanup_job() -> str:
+    """Launch the CPU cleanup job (prune images not referenced by embeddings)."""
+    job = run_uv_job(
+        _CLEANUP_SCRIPT,
+        flavor=settings.hf_cleanup_flavor,
+        timeout=settings.hf_job_timeout,
+        volumes=[_bucket_volume()],
+        env={"EMBEDDINGS_PATH": settings.embeddings_path},
+        token=_TOKEN,
+    )
+    logger.info("Triggered cleanup job %s (%s)", job.id, job.url)
     return job.id
 
 
