@@ -1,0 +1,30 @@
+name: Deploy Space
+
+# Push the Gradio search frontend to the HF Space when space/ changes, or on demand.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "space/**"
+      - ".github/workflows/deploy-space.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-space
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      SPACE_REPO_ID: ${{ vars.SPACE_REPO_ID || 'shrnik/worldscope-search' }}
+      PYTHONPATH: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Deploy space to Hugging Face
+        run: >-
+          uv run --no-project --with huggingface_hub
+          python scripts/deploy_space.py
