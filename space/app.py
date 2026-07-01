@@ -12,6 +12,7 @@ from __future__ import annotations
 import io
 import json
 import os
+from datetime import datetime, timezone
 
 import gradio as gr
 import httpx
@@ -86,8 +87,27 @@ def search(query: str):
     for i in top:
         m = _meta[i]
         name = (m["metadata"].get("camera_name") or "camera").strip()
-        results.append((m["url"], f"{name} · {scores[i]:.2f}"))
+        results.append((m["url"], f"{name} · {_fmt_ts(m.get('ts'))} · {scores[i]:.2f}"))
     return results
+
+
+def _fmt_ts(ts) -> str:
+    """Render the snapshot timestamp as a relative 'time ago' string."""
+    if not ts:
+        return "—"
+    try:
+        when = datetime.fromisoformat(str(ts))
+    except ValueError:
+        return str(ts)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    seconds = (datetime.now(timezone.utc) - when).total_seconds()
+    if seconds < 0:
+        return "just now"
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= size:
+            return f"{int(seconds // size)}{unit} ago"
+    return "just now"
 
 
 # --- UI ----------------------------------------------------------------------
