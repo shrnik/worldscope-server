@@ -28,10 +28,10 @@ no workers, no database.
               into memory and serves brute-force cosine search
 ```
 
-- **Data sources:** a Google Sheet of camera URLs + the FAA weather-camera API (~7–8k cameras).
+- **Data sources:** a Google Sheet of camera URLs plus three live APIs — FAA weather cameras, USGS VolcView ashcams, and AlertWest (~16k cameras total).
 - **Storage:** `hf://buckets/<ns>/worldscope` holds the snapshots (served via public
   `…/resolve/…` URLs), plus `manifest.parquet` and `embeddings.parquet`.
-- **Search:** ~10k × 512-dim vectors (~20 MB) → in-memory numpy cosine search, sub-millisecond.
+- **Search:** ~15k × 512-dim vectors (~30 MB) → in-memory numpy cosine search, sub-millisecond.
 
 ## 📂 Layout
 
@@ -41,7 +41,7 @@ no workers, no database.
 | `app/clip_model.py` | Loads CLIP once; `embed_text()` for queries |
 | `app/index.py` | In-memory embeddings index + brute-force cosine search |
 | `app/hf_jobs.py` | Trigger/poll HF Jobs; build bucket URLs |
-| `app/cameras.py` | Camera list (Google Sheet + FAA) |
+| `app/cameras.py` | Camera list (Google Sheet + FAA, USGS VolcView, AlertWest APIs) |
 | `jobs/download_job.py` | HF Job (CPU): fetch cameras + snapshots → bucket + manifest |
 | `jobs/embed_job.py` | HF Job (GPU): manifest + images → `embeddings.parquet` |
 | `jobs/cleanup_job.py` | HF Job (CPU): delete images not referenced by `embeddings.parquet` |

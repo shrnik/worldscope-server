@@ -15,7 +15,7 @@ reads the manifest and computes embeddings. Splitting avoids paying GPU rates wh
 downloading.
 
 Steps:
-  1. Build the camera list (Google Sheet + FAA API).
+  1. Build the camera list (Google Sheet + FAA, VolcView, and AlertWest APIs).
   2. Download each snapshot to /bucket/images/<camera_id>/<ts>.jpg (bounded concurrency).
   3. Write /bucket/<MANIFEST_PATH> (parquet) with one row per successfully downloaded image.
 
@@ -46,6 +46,9 @@ FAA_API_KEY = os.environ.get("FAA_API_KEY", "")
 FAA_API_URL = "https://weathercams.faa.gov/api/redistributable/sites"
 VOLCVIEW_API_URL = "https://volcview.wr.usgs.gov/ashcam-api/webcamApi/webcams"
 VOLCVIEW_SOURCE = "https://volcview.wr.usgs.gov/ashcam-api/webcamApi/"
+ALERTWEST_API_URL = "https://alertwest.live/api/getCameraDataByLoc"
+ALERTWEST_IMG_BASE = "https://img.cdn.prod.alertwest.com/data/img"
+ALERTWEST_SOURCE = "alertwest.live"
 
 DOWNLOAD_CONCURRENCY = 16
 # 0 = no cap; otherwise process at most this many cameras (useful for test runs).
@@ -69,7 +72,7 @@ def get_sheet_images() -> list[dict[str, Any]]:
                 "refresh_rate": row[5] if len(row) > 5 else None,
             }
         )
-    excluded = {"faa.gov", VOLCVIEW_SOURCE}
+    excluded = {"faa.gov", VOLCVIEW_SOURCE, ALERTWEST_SOURCE}
     return [c for c in cameras if c["source"] not in excluded]
 
 
@@ -125,6 +128,56 @@ def get_volcview_images() -> list[dict[str, Any]]:
     return cameras
 
 
+def _alertwest_image_url(cam: dict[str, Any]) -> str | None:
+    # data/img/<cid>/<yyyy>/<mm>/<dd>/<img>; date from the epoch embedded in img.
+    cid, img = cam.get("id"), cam.get("img")
+    if not cid or not img:
+        return None
+    stem = img[:-4] if img.lower().endswith(".jpg") else img
+    epoch = next(
+        (
+            int(tok)
+            for tok in reversed(stem.split("_"))
+            if tok.isdigit() and 1_000_000_000 <= int(tok) <= 2_000_000_000
+        ),
+        None,
+    )
+    if epoch is None:
+        return None
+    d = dt.datetime.fromtimestamp(epoch, dt.timezone.utc)
+    return f"{ALERTWEST_IMG_BASE}/{cid}/{d.year}/{d.month:02d}/{d.day:02d}/{img}"
+
+
+def get_alertwest_images() -> list[dict[str, Any]]:
+    res = httpx.get(ALERTWEST_API_URL, timeout=60)
+    res.raise_for_status()
+    data = res.json().get("data") or {}
+    cams = (data.get("cams") or {}).get("data") or []
+    locs = {loc["id"]: loc for loc in (data.get("locs") or {}).get("data") or []}
+    cameras = []
+    for cam in cams:
+        if cam.get("off") == 1:
+            continue
+        if (cam.get("pr") or "").upper() == "FAA":  # FAA cams: see get_faa_images()
+            continue
+        url = _alertwest_image_url(cam)
+        if not url:
+            continue
+        loc = locs.get(cam.get("lid")) or {}
+        cameras.append(
+            {
+                "camera_id": None,
+                "camera_name": cam.get("cn"),
+                "url": url,
+                "source": ALERTWEST_SOURCE,
+                "lat": loc.get("lat"),
+                "lon": loc.get("lon"),
+                "refresh_rate": "1 min",
+            }
+        )
+    return cameras
+
+
 def get_all_cameras() -> list[dict[str, Any]]:
     # Isolate sources: a slow/failing source shouldn't abort the whole run.
     try:
@@ -142,15 +195,22 @@ def get_all_cameras() -> list[dict[str, Any]]:
     except Exception as exc:  # noqa: BLE001
         print(f"VolcView source failed: {exc}")
         volcview = []
+    try:
+        alertwest = get_alertwest_images()
+    except Exception as exc:  # noqa: BLE001
+        print(f"AlertWest source failed: {exc}")
+        alertwest = []
     for i, cam in enumerate(faa):
         cam["camera_id"] = f"faa-{i}"
     for i, cam in enumerate(volcview):
         cam["camera_id"] = f"volcview-{i}"
+    for i, cam in enumerate(alertwest):
+        cam["camera_id"] = f"alertwest-{i}"
     print(
         f"cameras: {len(sheet)} from sheet, {len(faa)} from FAA, "
-        f"{len(volcview)} from VolcView"
+        f"{len(volcview)} from VolcView, {len(alertwest)} from AlertWest"
     )
-    return [c for c in [*sheet, *faa, *volcview] if c.get("url")]
+    return [c for c in [*sheet, *faa, *volcview, *alertwest] if c.get("url")]
 
 
 def download_one(camera: dict[str, Any], ts_iso: str, ts_file: str) -> dict[str, Any] | None:
