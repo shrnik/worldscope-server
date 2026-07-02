@@ -14,6 +14,9 @@ import httpx
 from app.settings import settings
 
 FAA_API_URL = "https://weathercams.faa.gov/api/redistributable/sites"
+VOLCVIEW_API_URL = "https://volcview.wr.usgs.gov/ashcam-api/webcamApi/webcams"
+# Sheet rows tagged with this source are dropped in favor of the live API above.
+VOLCVIEW_SOURCE = "https://volcview.wr.usgs.gov/ashcam-api/webcamApi/"
 
 
 def get_sheet_images() -> list[dict[str, Any]]:
@@ -36,7 +39,8 @@ def get_sheet_images() -> list[dict[str, Any]]:
                 "refresh_rate": row[5] if len(row) > 5 else None,
             }
         )
-    return [c for c in cameras if c["source"] != "faa.gov"]
+    excluded = {"faa.gov", VOLCVIEW_SOURCE}
+    return [c for c in cameras if c["source"] not in excluded]
 
 
 def get_faa_images() -> list[dict[str, Any]]:
@@ -72,11 +76,39 @@ def get_faa_images() -> list[dict[str, Any]]:
     return cameras
 
 
+def get_volcview_images() -> list[dict[str, Any]]:
+    """Fetch USGS VolcView ashcam snapshots, one entry per imaged webcam."""
+    res = httpx.get(VOLCVIEW_API_URL, timeout=30)
+    res.raise_for_status()
+    webcams = res.json().get("webcams", []) or []
+
+    cameras: list[dict[str, Any]] = []
+    for cam in webcams:
+        url = cam.get("currentImageUrl")
+        if not url:  # only webcams with a live snapshot
+            continue
+        cameras.append(
+            {
+                "camera_id": None,  # assigned below
+                "camera_name": cam.get("webcamName"),
+                "url": url,
+                "source": VOLCVIEW_SOURCE,
+                "lat": cam.get("latitude"),
+                "lon": cam.get("longitude"),
+                "refresh_rate": "10 min",
+            }
+        )
+    return cameras
+
+
 def get_all_cameras() -> list[dict[str, Any]]:
     """Combined camera list with stable, unique camera_ids."""
     sheet = get_sheet_images()
     faa = get_faa_images()
+    volcview = get_volcview_images()
     for i, cam in enumerate(faa):
         cam["camera_id"] = f"faa-{i}"
-    cameras = [*sheet, *faa]
+    for i, cam in enumerate(volcview):
+        cam["camera_id"] = f"volcview-{i}"
+    cameras = [*sheet, *faa, *volcview]
     return [c for c in cameras if c.get("url")]

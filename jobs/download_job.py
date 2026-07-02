@@ -44,6 +44,8 @@ HF_ENDPOINT = os.environ.get("HF_ENDPOINT", "https://huggingface.co")
 SHEET_URL = os.environ["SHEET_URL"]
 FAA_API_KEY = os.environ.get("FAA_API_KEY", "")
 FAA_API_URL = "https://weathercams.faa.gov/api/redistributable/sites"
+VOLCVIEW_API_URL = "https://volcview.wr.usgs.gov/ashcam-api/webcamApi/webcams"
+VOLCVIEW_SOURCE = "https://volcview.wr.usgs.gov/ashcam-api/webcamApi/"
 
 DOWNLOAD_CONCURRENCY = 16
 # 0 = no cap; otherwise process at most this many cameras (useful for test runs).
@@ -67,7 +69,8 @@ def get_sheet_images() -> list[dict[str, Any]]:
                 "refresh_rate": row[5] if len(row) > 5 else None,
             }
         )
-    return [c for c in cameras if c["source"] != "faa.gov"]
+    excluded = {"faa.gov", VOLCVIEW_SOURCE}
+    return [c for c in cameras if c["source"] not in excluded]
 
 
 def get_faa_images() -> list[dict[str, Any]]:
@@ -99,6 +102,29 @@ def get_faa_images() -> list[dict[str, Any]]:
     return cameras
 
 
+def get_volcview_images() -> list[dict[str, Any]]:
+    res = httpx.get(VOLCVIEW_API_URL, timeout=60)
+    res.raise_for_status()
+    webcams = res.json().get("webcams", []) or []
+    cameras = []
+    for cam in webcams:
+        url = cam.get("currentImageUrl")
+        if not url:
+            continue
+        cameras.append(
+            {
+                "camera_id": None,
+                "camera_name": cam.get("webcamName"),
+                "url": url,
+                "source": VOLCVIEW_SOURCE,
+                "lat": cam.get("latitude"),
+                "lon": cam.get("longitude"),
+                "refresh_rate": "10 min",
+            }
+        )
+    return cameras
+
+
 def get_all_cameras() -> list[dict[str, Any]]:
     # Isolate sources: a slow/failing source shouldn't abort the whole run.
     try:
@@ -111,10 +137,20 @@ def get_all_cameras() -> list[dict[str, Any]]:
     except Exception as exc:  # noqa: BLE001
         print(f"FAA source failed: {exc}")
         faa = []
+    try:
+        volcview = get_volcview_images()
+    except Exception as exc:  # noqa: BLE001
+        print(f"VolcView source failed: {exc}")
+        volcview = []
     for i, cam in enumerate(faa):
         cam["camera_id"] = f"faa-{i}"
-    print(f"cameras: {len(sheet)} from sheet, {len(faa)} from FAA")
-    return [c for c in [*sheet, *faa] if c.get("url")]
+    for i, cam in enumerate(volcview):
+        cam["camera_id"] = f"volcview-{i}"
+    print(
+        f"cameras: {len(sheet)} from sheet, {len(faa)} from FAA, "
+        f"{len(volcview)} from VolcView"
+    )
+    return [c for c in [*sheet, *faa, *volcview] if c.get("url")]
 
 
 def download_one(camera: dict[str, Any], ts_iso: str, ts_file: str) -> dict[str, Any] | None:
