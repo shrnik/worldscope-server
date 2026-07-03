@@ -1,0 +1,1670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ground Camera Calibrator</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+:root{
+  --paper:#edf1f0;        /* instrument housing */
+  --panel:#ffffff;
+  --ink:#1b2a2f;          /* deep pine slate */
+  --muted:#5c6f74;
+  --accent:#e8590c;       /* survey-flag orange : camera / sensor side */
+  --accent-soft:#fbe4d5;
+  --world:#0b7285;        /* teal : world / map side */
+  --world-soft:#d7eef2;
+  --line:#d4dbd9;
+  --ok:#2b8a3e;
+  --bad:#c92a2a;
+  --mono:ui-monospace,'SF Mono','Cascadia Mono','JetBrains Mono',Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:var(--sans);color:var(--ink);background:var(--paper);
+  display:grid;grid-template-rows:auto 1fr auto;height:100vh;overflow:hidden;
+  font-size:13.5px;
+}
+
+/* ---------- top bar ---------- */
+header{
+  display:flex;align-items:center;gap:14px;padding:8px 14px;
+  background:var(--ink);color:#e8eeec;border-bottom:3px solid var(--accent);
+}
+header h1{font-size:15px;font-weight:650;letter-spacing:.02em}
+header h1 .reticle{color:var(--accent);font-family:var(--mono);margin-right:6px}
+header .spacer{flex:1}
+.chip{
+  font-family:var(--mono);font-size:11px;padding:3px 9px;border-radius:999px;
+  background:#2c3e44;color:#bccbc9;white-space:nowrap;
+}
+.chip.ok{background:#1f4d2c;color:#a3e6b4}
+.chip.warn{background:#5c3a12;color:#ffd8a8}
+header button{
+  font:inherit;font-size:12px;padding:5px 11px;border-radius:6px;border:1px solid #46595f;
+  background:transparent;color:#dbe5e3;cursor:pointer;
+}
+header button:hover{background:#2c3e44}
+
+/* ---------- layout ---------- */
+main{display:grid;grid-template-columns:302px 1fr;min-height:0}
+aside{
+  background:var(--panel);border-right:1px solid var(--line);
+  overflow-y:auto;min-height:0;
+}
+#workspace{display:grid;grid-template-columns:1fr 1fr;min-width:0;min-height:0}
+.pane{display:flex;flex-direction:column;min-width:0;min-height:0}
+.pane-head{
+  display:flex;align-items:center;gap:8px;padding:5px 12px;
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;
+  color:#fff;
+}
+.pane-head .dot{width:8px;height:8px;border-radius:2px;background:#fff;opacity:.85}
+.pane-head small{opacity:.75;letter-spacing:.05em;text-transform:none;margin-left:auto}
+#imagePane .pane-head{background:var(--accent)}
+#mapPane .pane-head{background:var(--world)}
+#imagePane{border-right:1px solid var(--line)}
+.pane-body{flex:1;position:relative;min-height:0;background:#20292c}
+#imgCanvas{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;touch-action:none}
+#map{position:absolute;inset:0}
+#dropHint{
+  position:absolute;inset:0;display:flex;flex-direction:column;gap:10px;align-items:center;justify-content:center;
+  color:#9fb2ae;pointer-events:none;text-align:center;padding:20px;
+}
+#dropHint .big{font-size:15px;color:#c9d6d3}
+#dropHint kbd{font-family:var(--mono);background:#2c3a3e;padding:2px 7px;border-radius:4px;font-size:12px}
+
+/* ---------- sidebar sections ---------- */
+details.sec{border-bottom:1px solid var(--line)}
+details.sec>summary{
+  list-style:none;display:flex;align-items:center;gap:9px;padding:9px 12px;cursor:pointer;
+  font-weight:650;font-size:12.5px;user-select:none;
+}
+details.sec>summary::-webkit-details-marker{display:none}
+details.sec>summary .step{
+  font-family:var(--mono);font-size:10px;color:var(--accent);border:1px solid var(--accent);
+  border-radius:3px;padding:1px 5px;min-width:20px;text-align:center;
+}
+details.sec>summary .caret{margin-left:auto;color:var(--muted);transition:transform .15s;font-size:11px}
+details.sec[open]>summary .caret{transform:rotate(90deg)}
+.sec-body{padding:2px 12px 12px}
+.hint{color:var(--muted);font-size:11.5px;line-height:1.45;margin:4px 0 8px}
+
+button.act{
+  font:inherit;font-size:12.5px;font-weight:600;width:100%;padding:7px 10px;margin:4px 0;
+  border-radius:7px;border:1px solid var(--line);background:#f6f8f7;color:var(--ink);cursor:pointer;
+}
+button.act:hover{border-color:var(--muted)}
+button.act.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button.act.primary:hover{background:#cf4d09}
+button.act.world{background:var(--world);border-color:var(--world);color:#fff}
+button.act.world:hover{background:#095e6e}
+button.act.armed{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);animation:pulse 1.2s infinite}
+button.act:disabled{opacity:.45;cursor:not-allowed}
+@keyframes pulse{50%{box-shadow:0 0 0 4px rgba(232,89,12,.15)}}
+.btnrow{display:flex;gap:6px}
+.btnrow button{flex:1}
+
+.kv{display:flex;justify-content:space-between;gap:8px;font-family:var(--mono);font-size:11.5px;padding:2px 0;color:var(--muted)}
+.kv b{color:var(--ink);font-weight:600}
+
+/* parameter rows */
+.prow{display:grid;grid-template-columns:52px 1fr 74px;gap:7px;align-items:center;margin:5px 0}
+.prow label{font-family:var(--mono);font-size:11px;color:var(--muted)}
+.prow input[type=range]{width:100%;accent-color:var(--accent)}
+.prow input[type=number]{
+  font-family:var(--mono);font-size:11.5px;width:100%;padding:3px 5px;
+  border:1px solid var(--line);border-radius:5px;background:#fff;color:var(--ink);
+}
+.pgroup{font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);margin:10px 0 2px;border-bottom:1px dashed var(--line);padding-bottom:3px}
+.checkline{display:flex;align-items:center;gap:7px;font-size:12px;margin:6px 0}
+.checkline input{accent-color:var(--accent)}
+input.small{
+  font-family:var(--mono);font-size:11.5px;width:70px;padding:3px 5px;
+  border:1px solid var(--line);border-radius:5px;
+}
+
+/* points table */
+table#ptTable{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:10.5px;margin-top:4px}
+#ptTable th{color:var(--muted);font-weight:600;text-align:left;padding:2px 3px;border-bottom:1px solid var(--line);font-size:9.5px;letter-spacing:.06em}
+#ptTable td{padding:2px 3px;border-bottom:1px solid #eef2f1;vertical-align:middle}
+#ptTable tr.sel td{background:var(--accent-soft)}
+#ptTable input{width:100%;font:inherit;border:1px solid transparent;border-radius:3px;padding:1px 2px;background:transparent}
+#ptTable input:hover,#ptTable input:focus{border-color:var(--line);background:#fff;outline:none}
+#ptTable .idx{display:inline-block;width:16px;height:16px;border-radius:50%;color:#fff;text-align:center;line-height:16px;font-size:9.5px;font-weight:700}
+#ptTable .del{cursor:pointer;color:var(--muted);border:none;background:none;font-size:13px;padding:0 3px}
+#ptTable .del:hover{color:var(--bad)}
+#ptTable .res{text-align:right}
+
+/* calibration result */
+#calibResult,#geoResult{font-family:var(--mono);font-size:11.5px;margin-top:6px;padding:7px 9px;border-radius:6px;background:#f4f7f6;border:1px solid var(--line);display:none}
+#calibResult.show,#geoResult.show{display:block}
+#calibResult .rms,#geoResult .rms{font-size:15px;font-weight:700}
+#calibResult.good .rms,#geoResult.good .rms{color:var(--ok)}
+#calibResult.poor .rms,#geoResult.poor .rms{color:var(--bad)}
+
+/* footer status */
+footer{
+  display:flex;gap:18px;align-items:center;padding:4px 14px;background:var(--ink);color:#9fb2ae;
+  font-family:var(--mono);font-size:11px;white-space:nowrap;overflow:hidden;
+}
+footer .mode{color:#ffd8a8}
+footer .grow{flex:1}
+#cursorPos{color:#8fd3de}
+
+/* map markers */
+.pair-flag{background:none;border:none}
+.pair-flag .pin{
+  width:18px;height:18px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);
+  border:2px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.5);
+  display:flex;align-items:center;justify-content:center;
+}
+.pair-flag .pin span{transform:rotate(45deg);color:#fff;font:700 9px var(--mono)}
+.origin-icon,.camera-icon{background:none;border:none}
+.origin-icon div{
+  width:14px;height:14px;border:3px solid #fff;background:var(--world);
+  transform:rotate(45deg);box-shadow:0 1px 3px rgba(0,0,0,.5);
+}
+.camera-icon div{
+  width:0;height:0;border-left:9px solid transparent;border-right:9px solid transparent;
+  border-bottom:16px solid var(--accent);filter:drop-shadow(0 1px 2px rgba(0,0,0,.5));
+}
+.leaflet-container{font:inherit}
+
+@media (max-width: 980px){
+  body{overflow:auto;height:auto}
+  main{grid-template-columns:1fr}
+  aside{max-height:none;border-right:none;border-bottom:1px solid var(--line)}
+  #workspace{grid-template-columns:1fr;grid-template-rows:52vh 52vh}
+  #imagePane{border-right:none;border-bottom:1px solid var(--line)}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="reticle">&#8982;</span>Ground Camera Calibrator</h1>
+  <span class="chip" id="cvChip">OpenCV.js: loading&hellip;</span>
+  <span class="spacer"></span>
+  <button id="btnExport">Export project</button>
+  <button id="btnImport">Import project</button>
+  <input type="file" id="importFile" accept=".json" hidden>
+</header>
+
+<main>
+<aside>
+
+  <details class="sec" open>
+    <summary><span class="step">1</span>Camera image<span class="caret">&#9656;</span></summary>
+    <div class="sec-body">
+      <p class="hint">Load a still frame from the camera you want to calibrate.</p>
+      <button class="act primary" id="btnLoadImg">Load image&hellip;</button>
+      <input type="file" id="imgFile" accept="image/*" hidden>
+      <div class="kv"><span>Size</span><b id="imgSize">&mdash;</b></div>
+    </div>
+  </details>
+
+  <details class="sec" open>
+    <summary><span class="step">2</span>Origin &amp; camera GPS<span class="caret">&#9656;</span></summary>
+    <div class="sec-body">
+      <p class="hint">The origin anchors the local metric grid (east / north in meters). Then place the camera at its GPS position.</p>
+      <div class="btnrow">
+        <button class="act world" id="btnSetOrigin">Set origin on map</button>
+        <button class="act" id="btnSetCamera">Place camera</button>
+      </div>
+      <div class="kv"><span>Origin</span><b id="originReadout">not set</b></div>
+      <div class="kv"><span>Camera</span><b id="cameraReadout">not set</b></div>
+    </div>
+  </details>
+
+  <details class="sec" open>
+    <summary><span class="step">3</span>Point pairs <span id="pairCount" style="font-family:var(--mono);font-weight:400;color:var(--muted);font-size:11px"></span><span class="caret">&#9656;</span></summary>
+    <div class="sec-body">
+      <p class="hint">Click a feature in the <b>camera image</b>, then click the same spot on the <b>map</b> &mdash; or import a CSV (columns: id, img_x, img_y, map_lat, map_lng, map_altitude). Drag markers or edit cells to refine. 4+ well-spread points needed.</p>
+      <button class="act primary" id="btnAddPairs">Start adding pairs</button>
+      <div class="btnrow">
+        <button class="act" id="btnImportCSV">Import CSV</button>
+        <button class="act" id="btnExportCSV">Export CSV</button>
+      </div>
+      <input type="file" id="csvFile" accept=".csv,text/csv,text/plain" hidden>
+      <div class="checkline" style="justify-content:space-between" title="Altitudes in a CSV are converted to z = altitude - ground elevation. Auto = lowest imported point.">
+        <span style="color:var(--muted);font-family:var(--mono);font-size:11px">ground elev (m)</span>
+        <input class="small" type="number" id="datumN" step="0.1" placeholder="auto">
+      </div>
+      <table id="ptTable">
+        <thead><tr><th></th><th>px u,v</th><th>lat</th><th>lon</th><th>z</th><th>err</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <button class="act" id="btnClearPairs">Clear all pairs</button>
+    </div>
+  </details>
+
+  <details class="sec" open>
+    <summary><span class="step">4</span>Camera parameters<span class="caret">&#9656;</span></summary>
+    <div class="sec-body" id="paramBody">
+      <p class="hint">Everything re-projects live onto the image. Tune by hand or let step 5 solve it.</p>
+      <label class="checkline"><input type="checkbox" id="optHorizon" checked> Show horizon + compass bearings</label>
+      <button class="act" id="btnGeoCalib">Estimate with GeoCalib (AI)</button>
+      <p class="hint" style="margin-top:0">Single-image neural estimate of focal length, distortion and camera tilt (hosted GeoCalib model on Hugging Face &mdash; needs internet, first call may take a minute while the Space wakes).</p>
+      <div id="geoResult"></div>
+      <!-- parameter rows injected by JS -->
+    </div>
+  </details>
+
+  <details class="sec" open>
+    <summary><span class="step">5</span>Calibrate<span class="caret">&#9656;</span></summary>
+    <div class="sec-body">
+      <label class="checkline"><input type="checkbox" id="optFocal" checked> Also solve focal length</label>
+      <label class="checkline"><input type="checkbox" id="optDist"> Also solve distortion k1, k2 <span style="color:var(--muted)">(needs 6+ pts)</span></label>
+      <button class="act primary" id="btnCalibrate">Solve camera pose</button>
+      <div id="calibResult"></div>
+    </div>
+  </details>
+
+  <details class="sec" open>
+    <summary><span class="step">6</span>OSM context<span class="caret">&#9656;</span></summary>
+    <div class="sec-body">
+      <p class="hint">Fetch OpenStreetMap building footprints <b>and</b> point landmarks (street lamps, poles, manholes, signals, signs, benches, trees) around the camera. Landmarks and building corners are exact coordinates &mdash; map clicks snap to them while adding pairs.</p>
+      <div class="prow"><label>radius m</label><input type="range" id="osmRadiusR" min="50" max="600" step="10" value="200"><input type="number" id="osmRadiusN" min="50" max="600" step="10" value="200"></div>
+      <button class="act world" id="btnFetchOSM">Fetch buildings + roads + landmarks</button>
+      <label class="checkline"><input type="checkbox" id="optShowFp" checked> Buildings on camera image</label>
+      <label class="checkline"><input type="checkbox" id="optShowLm" checked> Landmarks on camera image</label>
+      <label class="checkline"><input type="checkbox" id="optSnap" checked> Snap pair clicks to landmarks / corners</label>
+      <label class="checkline"><input type="checkbox" id="optOnlyRoads"> Show just the roads</label>
+      <div class="kv"><span>Buildings</span><b id="fpCount">0</b></div>
+      <div class="kv"><span>Roads</span><b id="roadCount">0</b></div>
+      <div class="kv"><span>Landmarks</span><b id="lmCount">0</b></div>
+      <button class="act" id="btnClearOSM">Clear OSM data</button>
+    </div>
+  </details>
+
+  <details class="sec">
+    <summary><span class="step">&#9881;</span>Settings<span class="caret">&#9656;</span></summary>
+    <div class="sec-body">
+      <p class="hint">Hugging Face access token. Stored only in this browser (localStorage) &mdash; never included in exported projects.</p>
+      <div class="prow"><label>HF token</label><input type="password" id="hfTokenInput" placeholder="hf_..." autocomplete="off" style="flex:1"></div>
+      <div class="btnrow">
+        <button class="act primary" id="btnSaveToken">Save token</button>
+        <button class="act" id="btnClearToken">Clear</button>
+      </div>
+      <div class="kv"><span>Status</span><b id="tokenStatus">not set</b></div>
+    </div>
+  </details>
+
+</aside>
+
+<div id="workspace">
+  <section class="pane" id="imagePane">
+    <div class="pane-head"><span class="dot"></span>Camera view <small id="imgHint">scroll = zoom &middot; drag = pan</small></div>
+    <div class="pane-body">
+      <canvas id="imgCanvas"></canvas>
+      <div id="dropHint">
+        <div class="big">No image loaded</div>
+        <div>Use <kbd>Load image</kbd> in the sidebar or drop a photo here</div>
+      </div>
+    </div>
+  </section>
+  <section class="pane" id="mapPane">
+    <div class="pane-head"><span class="dot"></span>World view &middot; Esri imagery <small>drag markers to refine</small></div>
+    <div class="pane-body"><div id="map"></div></div>
+  </section>
+</div>
+</main>
+
+<footer>
+  <span class="mode" id="modeMsg">Load an image and set the origin to begin.</span>
+  <span class="grow"></span>
+  <span id="cursorPos"></span>
+  <span id="rmsFoot"></span>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+'use strict';
+/* =====================================================================
+   MATH  (verified standalone: pose round-trip, projection, homography)
+   Frames: ENU meters from origin (x=E, y=N, z=Up).
+   Camera axes: x=right, y=down, z=forward (OpenCV convention).
+   yaw = deg clockwise from North, pitch = deg (+up), roll = deg (CW).
+   ===================================================================== */
+const D2R = Math.PI/180, R2D = 180/Math.PI, EARTH_R = 6378137.0;
+const llToENU = (lat, lon, o) => [
+  (lon - o.lon) * D2R * Math.cos(o.lat * D2R) * EARTH_R,
+  (lat - o.lat) * D2R * EARTH_R,
+];
+const enuToLL = (e, n, o) => [
+  o.lat + (n / EARTH_R) * R2D,
+  o.lon + (e / (EARTH_R * Math.cos(o.lat * D2R))) * R2D,
+];
+const cross = (a,b)=>[a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+const dot3  = (a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+const nrm3  = a=>Math.hypot(a[0],a[1],a[2]);
+const scl3  = (a,s)=>[a[0]*s,a[1]*s,a[2]*s];
+const sub3  = (a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+
+function rotFromYPR(yawD, pitchD, rollD){
+  const y=yawD*D2R, p=pitchD*D2R, r=rollD*D2R;
+  const f  = [Math.sin(y)*Math.cos(p), Math.cos(y)*Math.cos(p), Math.sin(p)];
+  const r0 = [Math.cos(y), -Math.sin(y), 0];
+  const u0 = cross(r0, f);
+  const right = [Math.cos(r)*r0[0]-Math.sin(r)*u0[0], Math.cos(r)*r0[1]-Math.sin(r)*u0[1], Math.cos(r)*r0[2]-Math.sin(r)*u0[2]];
+  const down = cross(f, right);
+  return [right, down, f];               // rows of R (world -> camera)
+}
+function yprFromRot(R){
+  const f = R[2];
+  const pitch = Math.asin(Math.max(-1, Math.min(1, f[2])));
+  const yaw = Math.atan2(f[0], f[1]);
+  const r0 = [Math.cos(yaw), -Math.sin(yaw), 0];
+  const u0 = cross(r0, f);
+  const roll = Math.atan2(-dot3(R[0], u0)/(nrm3(u0)||1), dot3(R[0], r0));
+  return [yaw*R2D, pitch*R2D, roll*R2D];
+}
+function projectPoint(P, C, R, fx, fy, cx, cy, k1, k2, maxR2){
+  const d = sub3(P, C);
+  const z = dot3(R[2], d);
+  if (z <= 1e-6) return null;
+  let x = dot3(R[0], d)/z, y = dot3(R[1], d)/z;
+  const r2 = x*x + y*y;
+  if (maxR2 && r2 > maxR2) return null;
+  const dst = 1 + k1*r2 + k2*r2*r2;
+  return [fx*x*dst + cx, fy*y*dst + cy];
+}
+/* --- homography DLT (points on ground plane) --- */
+function homographyDLT(worldPts, imgPts){
+  const n = worldPts.length;
+  const normOf = pts => {
+    let mx=0,my=0; pts.forEach(p=>{mx+=p[0];my+=p[1];}); mx/=n; my/=n;
+    let s=0; pts.forEach(p=>{s+=Math.hypot(p[0]-mx,p[1]-my);}); s=(s/n)||1;
+    const k = Math.SQRT2/s;
+    return {T:[[k,0,-k*mx],[0,k,-k*my],[0,0,1]], map:p=>[k*(p[0]-mx),k*(p[1]-my)]};
+  };
+  const NW=normOf(worldPts), NI=normOf(imgPts), A=[];
+  for(let i=0;i<n;i++){
+    const [X,Y]=NW.map(worldPts[i]), [u,v]=NI.map(imgPts[i]);
+    A.push([-X,-Y,-1, 0,0,0, u*X,u*Y,u]);
+    A.push([0,0,0, -X,-Y,-1, v*X,v*Y,v]);
+  }
+  const M = Array.from({length:9},()=>new Float64Array(9));
+  for(const row of A) for(let i=0;i<9;i++) for(let j=0;j<9;j++) M[i][j]+=row[i]*row[j];
+  let t=0; for(let i=0;i<9;i++) t=Math.max(t,M[i][i]);
+  const S = Array.from({length:9},(_,i)=>Array.from({length:9},(_,j)=>(i===j?t*1.01:0)-M[i][j]));
+  let v = new Float64Array(9).fill(1/3);
+  for(let it=0;it<300;it++){
+    const w = new Float64Array(9);
+    for(let i=0;i<9;i++){let s=0;for(let j=0;j<9;j++)s+=S[i][j]*v[j];w[i]=s;}
+    let nn=0;for(let i=0;i<9;i++)nn+=w[i]*w[i]; nn=Math.sqrt(nn)||1;
+    for(let i=0;i<9;i++)v[i]=w[i]/nn;
+  }
+  const Hn=[[v[0],v[1],v[2]],[v[3],v[4],v[5]],[v[6],v[7],v[8]]];
+  const H = mat3mul(mat3mul(mat3inv(NI.T), Hn), NW.T);
+  const s = H[2][2]||1;
+  return H.map(r=>r.map(x=>x/s));
+}
+function mat3mul(A,B){const C=[[0,0,0],[0,0,0],[0,0,0]];for(let i=0;i<3;i++)for(let j=0;j<3;j++)for(let k=0;k<3;k++)C[i][j]+=A[i][k]*B[k][j];return C;}
+function mat3inv(A){
+  const [a,b,c]=A[0],[d,e,f]=A[1],[g,h,i]=A[2];
+  const s=1/(a*(e*i-f*h)-b*(d*i-f*g)+c*(d*h-e*g));
+  return [[(e*i-f*h)*s,(c*h-b*i)*s,(b*f-c*e)*s],[(f*g-d*i)*s,(a*i-c*g)*s,(c*d-a*f)*s],[(d*h-e*g)*s,(b*g-a*h)*s,(a*e-b*d)*s]];
+}
+function poseFromHomography(H, fx, fy, cx, cy){
+  const Kinv=[[1/fx,0,-cx/fx],[0,1/fy,-cy/fy],[0,0,1]];
+  const M=mat3mul(Kinv,H);
+  const m1=[M[0][0],M[1][0],M[2][0]], m2=[M[0][1],M[1][1],M[2][1]], m3=[M[0][2],M[1][2],M[2][2]];
+  const lam0 = 1/(((nrm3(m1)+nrm3(m2))/2)||1);
+  const build = lam => {
+    let r1=scl3(m1,lam), r2=scl3(m2,lam), tt=scl3(m3,lam);
+    r1=scl3(r1,1/nrm3(r1));
+    r2=sub3(r2,scl3(r1,dot3(r1,r2))); r2=scl3(r2,1/nrm3(r2));
+    const r3=cross(r1,r2);
+    const R=[[r1[0],r2[0],r3[0]],[r1[1],r2[1],r3[1]],[r1[2],r2[2],r3[2]]];
+    const C=[-(R[0][0]*tt[0]+R[1][0]*tt[1]+R[2][0]*tt[2]),
+             -(R[0][1]*tt[0]+R[1][1]*tt[1]+R[2][1]*tt[2]),
+             -(R[0][2]*tt[0]+R[1][2]*tt[1]+R[2][2]*tt[2])];
+    return {R,C};
+  };
+  const a=build(lam0), b=build(-lam0);
+  return a.C[2] > 0 ? a : b;  // camera above ground
+}
+/* Levenberg-Marquardt 6-DoF pose refinement (C + yaw/pitch/roll), numeric Jacobian.
+   Handles per-point z heights and distortion exactly as projectPoint does. */
+function refinePoseLM(obj, img, C0, ypr0, fx, fy, cx, cy, k1, k2, iters=30){
+  let x = [...C0, ...ypr0];
+  const residuals = p => {
+    const R = rotFromYPR(p[3], p[4], p[5]), r = [];
+    for(let i=0;i<obj.length;i++){
+      const q = projectPoint(obj[i], [p[0],p[1],p[2]], R, fx, fy, cx, cy, k1, k2);
+      if(!q){ r.push(1e4, 1e4); continue; }
+      r.push(q[0]-img[i][0], q[1]-img[i][1]);
+    }
+    return r;
+  };
+  const cost = r => r.reduce((s,v)=>s+v*v, 0);
+  let lambda = 1e-3, r = residuals(x), c = cost(r);
+  for(let it=0; it<iters; it++){
+    const m = r.length, J = [];
+    for(let j=0;j<6;j++){
+      const h = (j<3 ? 1e-4 : 1e-5) * (1 + Math.abs(x[j]));
+      const xp = [...x]; xp[j] += h;
+      const rp = residuals(xp);
+      J.push(rp.map((v,i)=>(v-r[i])/h));
+    }
+    const A = Array.from({length:6},()=>new Float64Array(6));
+    const g = new Float64Array(6);
+    for(let i=0;i<6;i++){
+      for(let j=i;j<6;j++){ let s=0; for(let k=0;k<m;k++) s+=J[i][k]*J[j][k]; A[i][j]=A[j][i]=s; }
+      let s=0; for(let k=0;k<m;k++) s+=J[i][k]*r[k]; g[i]=s;
+    }
+    let improved = false;
+    for(let tries=0; tries<8; tries++){
+      const Ad = A.map((row,i)=>{ const rr=Float64Array.from(row); rr[i]*= (1+lambda); return rr; });
+      const dx = solve6(Ad, Array.from(g, v=>-v));
+      if(!dx){ lambda*=10; continue; }
+      const xn = x.map((v,i)=>v+dx[i]);
+      const rn = residuals(xn), cn2 = cost(rn);
+      if(cn2 < c){ x=xn; r=rn; c=cn2; lambda=Math.max(1e-9, lambda/3); improved=true; break; }
+      lambda *= 10;
+    }
+    if(!improved || c < 1e-12) break;
+  }
+  return { C:[x[0],x[1],x[2]], ypr:[x[3],x[4],x[5]], rms: Math.sqrt(c/obj.length) };
+}
+function solve6(A, b){
+  const n=6, M = A.map((row,i)=>[...row, b[i]]);
+  for(let col=0; col<n; col++){
+    let piv=col;
+    for(let r2=col+1;r2<n;r2++) if(Math.abs(M[r2][col])>Math.abs(M[piv][col])) piv=r2;
+    if(Math.abs(M[piv][col])<1e-14) return null;
+    [M[col],M[piv]]=[M[piv],M[col]];
+    for(let r2=0;r2<n;r2++){
+      if(r2===col) continue;
+      const k=M[r2][col]/M[col][col];
+      for(let cc=col;cc<=n;cc++) M[r2][cc]-=k*M[col][cc];
+    }
+  }
+  return M.map((row,i)=>row[n]/row[i]);
+}
+/* golden-section minimizer */
+function goldenMin(fn, lo, hi, iters){
+  const g=(Math.sqrt(5)-1)/2;
+  let a=lo, b=hi, c=b-g*(b-a), d=a+g*(b-a), fc=fn(c), fd=fn(d);
+  for(let i=0;i<iters;i++){
+    if(fc<fd){ b=d; d=c; fd=fc; c=b-g*(b-a); fc=fn(c); }
+    else     { a=c; c=d; fc=fd; d=a+g*(b-a); fd=fn(d); }
+  }
+  return (a+b)/2;
+}
+
+/* =====================================================================
+   STATE
+   ===================================================================== */
+const state = {
+  img: null,                 // HTMLImageElement
+  imgW: 0, imgH: 0,
+  origin: null,              // {lat, lon}
+  pairs: [],                 // {u, v, lat, lon, z, marker}
+  selPair: -1,
+  mode: 'idle',              // idle | origin | camera | pair-image | pair-map
+  pendingPixel: null,        // [u,v] awaiting map click
+  footprints: [],            // {ring:[[lat,lon]..], height, layer}
+  roads: [],                 // {pts:[[lat,lon]..], layer}
+  lastRMS: null,
+  cvReady: false,
+};
+const params = {
+  f: 1200, aspect: 1, cx: 0, cy: 0, k1: 0, k2: 0,
+  lat: null, lon: null, height: 10, yaw: 0, pitch: -10, roll: 0,
+};
+const pairColor = i => `hsl(${(i*53)%360} 68% 42%)`;
+
+function camPose(){                 // current pose in ENU (needs origin + camera GPS)
+  if(!state.origin || params.lat === null) return null;
+  const [e,n] = llToENU(params.lat, params.lon, state.origin);
+  return { C:[e,n,params.height], R: rotFromYPR(params.yaw, params.pitch, params.roll) };
+}
+function pairWorld(p){              // pair -> ENU [E,N,z]
+  const [e,n] = llToENU(p.lat, p.lon, state.origin);
+  return [e, n, p.z];
+}
+function projectWorld(P){           // ENU -> pixel with current params (or null)
+  const pose = camPose();
+  if(!pose) return null;
+  /* cull rays far outside the frustum: barely-in-front points project to huge
+     coordinates, and the k1/k2 polynomial can fold them back into the frame */
+  const w = state.imgW || 2*params.cx, h = state.imgH || 2*params.cy;
+  const rx = Math.max(params.cx, w - params.cx) / params.f;
+  const ry = Math.max(params.cy, h - params.cy) / (params.f*params.aspect);
+  const maxR2 = 4*(rx*rx + ry*ry);   // 2x the corner radius, so edge-crossing lines survive
+  return projectPoint(P, pose.C, pose.R, params.f, params.f*params.aspect, params.cx, params.cy, params.k1, params.k2, maxR2);
+}
+
+/* =====================================================================
+   PARAMETER CONTROLS (built from config)
+   ===================================================================== */
+const PARAM_DEFS = [
+  {group:'Intrinsics'},
+  {key:'f',     label:'f px',   min:100,  max:8000, step:1,    dec:0},
+  {key:'cx',    label:'cx',     min:0,    max:4000, step:1,    dec:0},
+  {key:'cy',    label:'cy',     min:0,    max:4000, step:1,    dec:0},
+  {key:'k1',    label:'k1',     min:-0.5, max:0.5,  step:0.001,dec:3},
+  {key:'k2',    label:'k2',     min:-0.5, max:0.5,  step:0.001,dec:3},
+  {group:'Position'},
+  {key:'lat',   label:'lat',    min:-90,  max:90,   step:1e-6, dec:6, noRange:true},
+  {key:'lon',   label:'lon',    min:-180, max:180,  step:1e-6, dec:6, noRange:true},
+  {key:'height',label:'ht m',   min:0.5,  max:120,  step:0.1,  dec:1},
+  {group:'Orientation'},
+  {key:'yaw',   label:'yaw&deg;',  min:-180, max:180, step:0.1, dec:1},
+  {key:'pitch', label:'pitch&deg;',min:-90,  max:90,  step:0.1, dec:1},
+  {key:'roll',  label:'roll&deg;', min:-45,  max:45,  step:0.1, dec:1},
+];
+const paramInputs = {};
+function buildParamUI(){
+  const host = document.getElementById('paramBody');
+  for(const def of PARAM_DEFS){
+    if(def.group){
+      const g = document.createElement('div');
+      g.className = 'pgroup'; g.textContent = def.group;
+      host.appendChild(g);
+      continue;
+    }
+    const row = document.createElement('div');
+    row.className = 'prow';
+    row.innerHTML = `<label>${def.label}</label>` +
+      (def.noRange ? '<span></span>' :
+        `<input type="range" min="${def.min}" max="${def.max}" step="${def.step}">`) +
+      `<input type="number" min="${def.min}" max="${def.max}" step="${def.step}">`;
+    host.appendChild(row);
+    const rng = def.noRange ? null : row.querySelector('input[type=range]');
+    const num = row.querySelector('input[type=number]');
+    const push = v => {
+      params[def.key] = v;
+      if(rng) rng.value = v;
+      num.value = (+v).toFixed(def.dec);
+      onParamsChanged();
+    };
+    if(rng) rng.addEventListener('input', () => push(parseFloat(rng.value)));
+    num.addEventListener('change', () => { const v=parseFloat(num.value); if(!isNaN(v)) push(v); });
+    paramInputs[def.key] = { set: v => {
+      params[def.key] = v;
+      if(rng) rng.value = v;
+      num.value = v === null ? '' : (+v).toFixed(def.dec);
+    }};
+  }
+  syncParamUI();
+}
+function syncParamUI(){
+  for(const k in paramInputs) paramInputs[k].set(params[k]);
+}
+function onParamsChanged(){
+  updateResiduals();
+  drawImage();
+  updateCameraOnMap();
+  updateReadouts();
+}
+
+/* =====================================================================
+   IMAGE CANVAS  (zoom / pan / click / drag points)
+   ===================================================================== */
+const canvas = document.getElementById('imgCanvas');
+const ctx = canvas.getContext('2d');
+const viewT = { s: 1, tx: 0, ty: 0 };            // image -> screen: screen = img*s + t
+const toScreen = (u,v) => [u*viewT.s + viewT.tx, v*viewT.s + viewT.ty];
+const toImage  = (x,y) => [(x - viewT.tx)/viewT.s, (y - viewT.ty)/viewT.s];
+
+function resizeCanvas(){
+  const r = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(r.width * dpr);
+  canvas.height = Math.round(r.height * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawImage();
+}
+function fitImage(){
+  const r = canvas.getBoundingClientRect();
+  if(!state.img) return;
+  viewT.s = Math.min(r.width/state.imgW, r.height/state.imgH) * 0.98;
+  viewT.tx = (r.width  - state.imgW*viewT.s)/2;
+  viewT.ty = (r.height - state.imgH*viewT.s)/2;
+}
+function drawCross(x, y, color, label){
+  ctx.strokeStyle = color; ctx.lineWidth = 1.6;
+  ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI*2); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(x-14,y); ctx.lineTo(x-5,y); ctx.moveTo(x+5,y); ctx.lineTo(x+14,y);
+  ctx.moveTo(x,y-14); ctx.lineTo(x,y-5); ctx.moveTo(x,y+5); ctx.lineTo(x,y+14);
+  ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(x, y, 1.6, 0, Math.PI*2); ctx.fill();
+  if(label !== undefined){
+    ctx.font = '700 10px ui-monospace,Menlo,monospace';
+    const w = ctx.measureText(label).width + 8;
+    ctx.fillRect(x+10, y-20, w, 13);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(label, x+14, y-10);
+  }
+}
+/* Estimated horizon: image of level (z=0) directions at infinity.
+   Needs only orientation + intrinsics — position and origin don't matter,
+   so it works the moment an image is loaded. Curved under distortion. */
+function drawHorizon(){
+  const R = rotFromYPR(params.yaw, params.pitch, params.roll);
+  const fx = params.f, fy = params.f*params.aspect;
+  const m = 0.35;
+  const minX = -state.imgW*m, maxX = state.imgW*(1+m);
+  const minY = -state.imgH*m, maxY = state.imgH*(1+m);
+  const pixAt = az => {
+    const d = [Math.sin(az), Math.cos(az), 0];          // level world direction
+    const z = dot3(R[2], d);
+    if(z <= 1e-6) return null;                          // behind camera
+    const x = dot3(R[0], d)/z, y = dot3(R[1], d)/z;
+    const u0 = fx*x + params.cx, v0 = fy*y + params.cy; // undistorted gate
+    if(u0 < minX || u0 > maxX || v0 < minY || v0 > maxY) return null;
+    const r2 = x*x + y*y, ds = 1 + params.k1*r2 + params.k2*r2*r2;
+    return [fx*x*ds + params.cx, fy*y*ds + params.cy];
+  };
+  ctx.strokeStyle = 'rgba(232,89,12,.9)';
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([8,5]);
+  ctx.beginPath();
+  let pen = false, prev = null;
+  for(let i=0; i<=1440; i++){
+    const p = pixAt(i*0.25*D2R);
+    if(!p){ pen = false; prev = null; continue; }
+    if(prev && Math.hypot(p[0]-prev[0], p[1]-prev[1]) > state.imgW*0.1) pen = false;
+    const s = toScreen(p[0], p[1]);
+    if(!pen){ ctx.moveTo(s[0], s[1]); pen = true; } else ctx.lineTo(s[0], s[1]);
+    prev = p;
+  }
+  ctx.stroke();
+  ctx.setLineDash([]);
+  /* compass bearing ticks along the horizon */
+  const cards = [[0,'N'],[45,'NE'],[90,'E'],[135,'SE'],[180,'S'],[225,'SW'],[270,'W'],[315,'NW']];
+  ctx.font = '700 10px ui-monospace,Menlo,monospace';
+  for(const [azd, lab] of cards){
+    const p = pixAt(azd*D2R);
+    if(!p || p[0] < 0 || p[0] > state.imgW || p[1] < -state.imgH*0.1 || p[1] > state.imgH*1.1) continue;
+    const s = toScreen(p[0], p[1]);
+    ctx.strokeStyle = 'rgba(232,89,12,.9)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(s[0], s[1]-6); ctx.lineTo(s[0], s[1]+6); ctx.stroke();
+    const w = ctx.measureText(lab).width;
+    ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 3;
+    ctx.strokeText(lab, s[0]-w/2, s[1]-10);
+    ctx.fillStyle = 'rgba(232,89,12,1)';
+    ctx.fillText(lab, s[0]-w/2, s[1]-10);
+  }
+}
+function drawImage(){
+  const r = canvas.getBoundingClientRect();
+  ctx.clearRect(0, 0, r.width, r.height);
+  if(!state.img) return;
+  ctx.save();
+  ctx.imageSmoothingEnabled = viewT.s < 3;
+  ctx.translate(viewT.tx, viewT.ty);
+  ctx.scale(viewT.s, viewT.s);
+  ctx.drawImage(state.img, 0, 0);
+  ctx.restore();
+
+  /* estimated horizon + compass */
+  if(document.getElementById('optHorizon').checked) drawHorizon();
+
+  const onlyRoads = document.getElementById('optOnlyRoads').checked;
+
+  /* projected OSM roads: ground-level polylines */
+  if(state.roads.length && camPose() && state.origin){
+    ctx.lineWidth = 1.6;
+    ctx.strokeStyle = 'rgba(232,89,12,.85)';
+    for(const rd of state.roads){
+      ctx.beginPath();
+      let started = false;
+      for(const ll of rd.pts){
+        const [e,n] = llToENU(ll[0], ll[1], state.origin);
+        const q = projectWorld([e, n, 0]);
+        if(!q){ started = false; continue; }
+        const [x,y] = toScreen(q[0], q[1]);
+        if(started) ctx.lineTo(x, y);
+        else { ctx.moveTo(x, y); started = true; }
+      }
+      ctx.stroke();
+    }
+  }
+
+  /* projected OSM footprints */
+  if(!onlyRoads && document.getElementById('optShowFp').checked && state.footprints.length && camPose() && state.origin){
+    ctx.lineWidth = 1.4;
+    for(const fp of state.footprints){
+      const base = fp.ring.map(ll => {
+        const [e,n] = llToENU(ll[0], ll[1], state.origin);
+        return { b: projectWorld([e,n,0]), t: projectWorld([e,n,fp.height]) };
+      });
+      const seg = (a, b, style) => {
+        if(!a || !b) return;
+        const A = toScreen(a[0],a[1]), B = toScreen(b[0],b[1]);
+        ctx.strokeStyle = style;
+        ctx.beginPath(); ctx.moveTo(A[0],A[1]); ctx.lineTo(B[0],B[1]); ctx.stroke();
+      };
+      for(let i=0;i<base.length;i++){
+        const j = (i+1)%base.length;
+        seg(base[i].b, base[j].b, 'rgba(11,114,133,.95)');   // ground outline
+        seg(base[i].t, base[j].t, 'rgba(11,114,133,.45)');   // roof outline
+        seg(base[i].b, base[i].t, 'rgba(11,114,133,.35)');   // vertical edge
+      }
+    }
+  }
+
+  /* projected OSM landmarks: small labeled diamonds at ground level */
+  if(!onlyRoads && document.getElementById('optShowLm').checked && state.landmarks.length && camPose() && state.origin){
+    ctx.font = '600 9px ui-monospace,Menlo,monospace';
+    for(const lm of state.landmarks){
+      const [e,n] = llToENU(lm.lat, lm.lon, state.origin);
+      const q = projectWorld([e, n, 0]);
+      if(!q || q[0] < -50 || q[0] > state.imgW+50 || q[1] < -50 || q[1] > state.imgH+50) continue;
+      const [x,y] = toScreen(q[0], q[1]);
+      const col = lmColor(lm.label);
+      ctx.save();
+      ctx.translate(x, y); ctx.rotate(Math.PI/4);
+      ctx.fillStyle = col;
+      ctx.fillRect(-3.5, -3.5, 7, 7);
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+      ctx.strokeRect(-3.5, -3.5, 7, 7);
+      ctx.restore();
+      if(viewT.s > 0.35 && state.landmarks.length <= 120){
+        const lab = lm.label.replace(/_/g, ' ');
+        ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = 2.5;
+        ctx.strokeText(lab, x+6, y-5);
+        ctx.fillStyle = col;
+        ctx.fillText(lab, x+6, y-5);
+      }
+    }
+  }
+
+  /* point pairs: clicked crosshair + reprojection */
+  state.pairs.forEach((p, i) => {
+    const col = pairColor(i);
+    const [x,y] = toScreen(p.u, p.v);
+    if(state.origin){
+      const q = projectWorld(pairWorld(p));
+      if(q){
+        const [qx,qy] = toScreen(q[0], q[1]);
+        ctx.strokeStyle = col; ctx.setLineDash([4,3]); ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(qx,qy); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = col;
+        ctx.beginPath(); ctx.arc(qx, qy, 3.5, 0, Math.PI*2); ctx.fill();
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.arc(qx, qy, 3.5, 0, Math.PI*2); ctx.stroke();
+      }
+    }
+    if(i === state.selPair){
+      ctx.strokeStyle = col; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(x, y, 13, 0, Math.PI*2); ctx.stroke();
+    }
+    drawCross(x, y, col, String(i+1));
+  });
+
+  /* pending half-pair */
+  if(state.pendingPixel){
+    const [x,y] = toScreen(state.pendingPixel[0], state.pendingPixel[1]);
+    drawCross(x, y, '#e8590c', '?');
+  }
+}
+
+/* pointer interaction */
+let drag = null;   // {kind:'pan'|'point', idx, sx, sy, moved, startT}
+canvas.addEventListener('pointerdown', ev => {
+  if(!state.img) return;
+  canvas.setPointerCapture(ev.pointerId);
+  const [ix, iy] = toImage(ev.offsetX, ev.offsetY);
+  let hit = -1;
+  state.pairs.forEach((p, i) => {
+    const [x,y] = toScreen(p.u, p.v);
+    if(Math.hypot(x-ev.offsetX, y-ev.offsetY) < 12) hit = i;
+  });
+  drag = hit >= 0
+    ? { kind:'point', idx:hit, moved:false }
+    : { kind:'pan', sx:ev.offsetX-viewT.tx, sy:ev.offsetY-viewT.ty, moved:false, ix, iy };
+});
+canvas.addEventListener('pointermove', ev => {
+  const [ix, iy] = toImage(ev.offsetX, ev.offsetY);
+  if(state.img)
+    setCursor(`px ${ix.toFixed(1)}, ${iy.toFixed(1)}`);
+  if(!drag) return;
+  drag.moved = true;
+  if(drag.kind === 'pan'){
+    viewT.tx = ev.offsetX - drag.sx;
+    viewT.ty = ev.offsetY - drag.sy;
+  } else {
+    const p = state.pairs[drag.idx];
+    p.u = ix; p.v = iy;
+    updateResiduals(); refreshTable();
+  }
+  drawImage();
+});
+canvas.addEventListener('pointerup', ev => {
+  if(!drag) return;
+  const wasClick = !drag.moved;
+  const kind = drag.kind, idx = drag.idx;
+  drag = null;
+  if(!wasClick){ if(kind==='point') refreshTable(); return; }
+  if(kind === 'point'){ selectPair(idx); return; }
+  if(state.mode === 'pair-image' || state.mode === 'pair-map'){
+    const [ix, iy] = toImage(ev.offsetX, ev.offsetY);
+    if(ix < 0 || iy < 0 || ix > state.imgW || iy > state.imgH) return;
+    state.pendingPixel = [ix, iy];
+    setMode('pair-map');
+    drawImage();
+  }
+});
+canvas.addEventListener('wheel', ev => {
+  if(!state.img) return;
+  ev.preventDefault();
+  const k = ev.deltaY < 0 ? 1.15 : 1/1.15;
+  const ns = Math.min(40, Math.max(0.02, viewT.s * k));
+  viewT.tx = ev.offsetX - (ev.offsetX - viewT.tx) * (ns/viewT.s);
+  viewT.ty = ev.offsetY - (ev.offsetY - viewT.ty) * (ns/viewT.s);
+  viewT.s = ns;
+  drawImage();
+}, { passive:false });
+canvas.addEventListener('dblclick', () => { fitImage(); drawImage(); });
+
+/* image loading */
+function loadImageFile(file){
+  const url = URL.createObjectURL(file);
+  const im = new Image();
+  im.onload = () => {
+    state.img = im; state.imgW = im.naturalWidth; state.imgH = im.naturalHeight;
+    document.getElementById('dropHint').style.display = 'none';
+    document.getElementById('imgSize').textContent = `${im.naturalWidth} × ${im.naturalHeight}`;
+    /* sensible intrinsic defaults for this image */
+    params.cx = im.naturalWidth/2; params.cy = im.naturalHeight/2;
+    if(params.f === 1200) params.f = im.naturalWidth * 0.85;
+    syncParamUI();
+    fitImage(); onParamsChanged();
+    setMsg('Image loaded. Set the origin on the map (step 2).');
+  };
+  im.src = url;
+}
+document.getElementById('btnLoadImg').onclick = () => document.getElementById('imgFile').click();
+document.getElementById('imgFile').onchange = e => e.target.files[0] && loadImageFile(e.target.files[0]);
+const paneBody = canvas.parentElement;
+paneBody.addEventListener('dragover', e => e.preventDefault());
+paneBody.addEventListener('drop', e => {
+  e.preventDefault();
+  const f = e.dataTransfer.files[0];
+  if(!f) return;
+  if(f.type.startsWith('image/')) return loadImageFile(f);
+  if(/\.csv$/i.test(f.name) || f.type === 'text/csv'){
+    const rd = new FileReader();
+    rd.onload = () => { try{ importCSVText(rd.result); }catch(err){ setMsg('CSV import failed: ' + err.message); } };
+    rd.readAsText(f);
+  }
+});
+</script>
+<script>
+/* =====================================================================
+   MAP  (Leaflet + Esri World Imagery)
+   ===================================================================== */
+const map = L.map('map', { zoomControl: true }).setView([39.0, -77.0], 4);
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 21, maxNativeZoom: 19,
+  attribution: 'Imagery &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics',
+}).addTo(map);
+const fpLayer = L.layerGroup().addTo(map);      // OSM footprints
+const roadLayer = L.layerGroup().addTo(map);    // OSM roads
+let originMarker = null, cameraMarker = null, fovWedge = null;
+
+const originIcon = L.divIcon({ className:'origin-icon', html:'<div></div>', iconSize:[14,14], iconAnchor:[7,7] });
+const cameraIcon = L.divIcon({ className:'camera-icon', html:'<div></div>', iconSize:[18,16], iconAnchor:[9,8] });
+
+function setOrigin(lat, lon){
+  state.origin = { lat, lon };
+  if(!originMarker){
+    originMarker = L.marker([lat,lon], { icon: originIcon, draggable: true, title:'Local origin' }).addTo(map);
+    originMarker.on('drag', e => { const p=e.target.getLatLng(); state.origin={lat:p.lat,lon:p.lng}; onParamsChanged(); refreshTable(); });
+  } else originMarker.setLatLng([lat,lon]);
+  /* convenience: put the camera at the origin if it has no position yet */
+  if(params.lat === null){ params.lat = lat; params.lon = lon; syncParamUI(); placeCameraMarker(); }
+  onParamsChanged(); refreshTable();
+}
+function placeCameraMarker(){
+  if(params.lat === null) return;
+  if(!cameraMarker){
+    cameraMarker = L.marker([params.lat, params.lon], { icon: cameraIcon, draggable: true, title:'Camera' }).addTo(map);
+    cameraMarker.on('drag', e => {
+      const p = e.target.getLatLng();
+      params.lat = p.lat; params.lon = p.lng;
+      syncParamUI(); onParamsChanged();
+    });
+  } else cameraMarker.setLatLng([params.lat, params.lon]);
+}
+function updateCameraOnMap(){
+  placeCameraMarker();
+  /* field-of-view wedge: heading + horizontal FOV drawn on the map */
+  if(fovWedge){ map.removeLayer(fovWedge); fovWedge = null; }
+  if(params.lat === null || !state.imgW) return;
+  const hfov = 2*Math.atan((state.imgW/2)/params.f);
+  const len = Math.max(40, +document.getElementById('osmRadiusN').value * 0.6);
+  const o = { lat: params.lat, lon: params.lon };
+  const pts = [[params.lat, params.lon]];
+  for(let i=0;i<=24;i++){
+    const a = (params.yaw*D2R) - hfov/2 + hfov*i/24;
+    const [la,lo] = enuToLL(Math.sin(a)*len, Math.cos(a)*len, o);
+    pts.push([la,lo]);
+  }
+  fovWedge = L.polygon(pts, { color:'#e8590c', weight:1, fillColor:'#e8590c', fillOpacity:.12, interactive:false }).addTo(map);
+}
+
+map.on('click', ev => {
+  const { lat, lng } = ev.latlng;
+  if(state.mode === 'origin'){
+    setOrigin(lat, lng); setMode('idle');
+    setMsg('Origin set. Place the camera, then start adding point pairs.');
+  } else if(state.mode === 'camera'){
+    params.lat = lat; params.lon = lng;
+    syncParamUI(); placeCameraMarker(); setMode('idle'); onParamsChanged();
+    setMsg('Camera placed. Adjust height / yaw / pitch in step 4, or just add pairs and solve.');
+  } else if(state.mode === 'pair-map' && state.pendingPixel){
+    const snap = snapLatLng(ev.latlng);
+    addPair(state.pendingPixel[0], state.pendingPixel[1], snap ? snap.lat : lat, snap ? snap.lon : lng);
+    state.pendingPixel = null;
+    setMode('pair-image');
+    if(snap) setMsg(`Pair snapped to OSM ${snap.label} \u2014 exact coordinates.`);
+  }
+});
+map.on('mousemove', ev => setCursor(`${ev.latlng.lat.toFixed(6)}, ${ev.latlng.lng.toFixed(6)}`));
+
+/* =====================================================================
+   MODES + STATUS
+   ===================================================================== */
+const modeMsg = document.getElementById('modeMsg');
+function setMsg(m){ modeMsg.textContent = m; }
+function setCursor(m){ document.getElementById('cursorPos').textContent = m; }
+function setMode(m){
+  state.mode = m;
+  const bAdd = document.getElementById('btnAddPairs');
+  const bOri = document.getElementById('btnSetOrigin');
+  const bCam = document.getElementById('btnSetCamera');
+  bAdd.classList.toggle('armed', m === 'pair-image' || m === 'pair-map');
+  bOri.classList.toggle('armed', m === 'origin');
+  bCam.classList.toggle('armed', m === 'camera');
+  bAdd.textContent = (m === 'pair-image' || m === 'pair-map') ? 'Stop adding pairs (Esc)' : 'Start adding pairs';
+  if(m === 'origin')      setMsg('Click the map to place the local origin.');
+  else if(m === 'camera') setMsg('Click the map at the camera\u2019s GPS position.');
+  else if(m === 'pair-image') setMsg('PAIR: click a ground feature in the CAMERA IMAGE\u2026');
+  else if(m === 'pair-map')   setMsg('PAIR: now click the SAME spot on the MAP.');
+  drawImage();
+}
+document.getElementById('btnSetOrigin').onclick = () => setMode(state.mode === 'origin' ? 'idle' : 'origin');
+document.getElementById('btnSetCamera').onclick = () => setMode(state.mode === 'camera' ? 'idle' : 'camera');
+document.getElementById('btnAddPairs').onclick = () => {
+  if(state.mode === 'pair-image' || state.mode === 'pair-map'){ state.pendingPixel=null; setMode('idle'); setMsg('Paused.'); return; }
+  if(!state.img) return setMsg('Load a camera image first (step 1).');
+  if(!state.origin) return setMsg('Set the origin first (step 2).');
+  setMode('pair-image');
+};
+window.addEventListener('keydown', e => {
+  if(e.key === 'Escape'){ state.pendingPixel = null; setMode('idle'); setMsg('Ready.'); }
+});
+
+/* =====================================================================
+   POINT PAIRS
+   ===================================================================== */
+function addPair(u, v, lat, lon){
+  const i = state.pairs.length;
+  const mk = L.marker([lat,lon], {
+    draggable: true,
+    icon: L.divIcon({ className:'pair-flag', iconSize:[18,18], iconAnchor:[3,16],
+      html:`<div class="pin" style="background:${pairColor(i)}"><span>${i+1}</span></div>` }),
+  }).addTo(map);
+  const p = { u, v, lat, lon, z: 0, marker: mk };
+  mk.on('drag', e => {
+    const ll = e.target.getLatLng();
+    p.lat = ll.lat; p.lon = ll.lng;
+    updateResiduals(); refreshTable(); drawImage();
+  });
+  mk.on('click', () => selectPair(state.pairs.indexOf(p)));
+  state.pairs.push(p);
+  updateResiduals(); refreshTable(); drawImage();
+}
+function removePair(i){
+  map.removeLayer(state.pairs[i].marker);
+  state.pairs.splice(i, 1);
+  /* renumber marker icons + colors */
+  state.pairs.forEach((p, j) => p.marker.setIcon(L.divIcon({ className:'pair-flag', iconSize:[18,18], iconAnchor:[3,16],
+    html:`<div class="pin" style="background:${pairColor(j)}"><span>${j+1}</span></div>` })));
+  state.selPair = -1;
+  updateResiduals(); refreshTable(); drawImage();
+}
+function selectPair(i){
+  state.selPair = i;
+  refreshTable(); drawImage();
+  if(state.pairs[i]) map.panTo([state.pairs[i].lat, state.pairs[i].lon]);
+}
+function refreshTable(){
+  const tb = document.querySelector('#ptTable tbody');
+  tb.innerHTML = '';
+  document.getElementById('pairCount').textContent = state.pairs.length ? `(${state.pairs.length})` : '';
+  state.pairs.forEach((p, i) => {
+    const tr = document.createElement('tr');
+    if(i === state.selPair) tr.className = 'sel';
+    tr.innerHTML =
+      `<td><span class="idx" style="background:${pairColor(i)}">${i+1}</span></td>` +
+      `<td>${p.u.toFixed(0)},${p.v.toFixed(0)}</td>` +
+      `<td><input data-k="lat" step="0.000001" type="number" value="${p.lat.toFixed(6)}"></td>` +
+      `<td><input data-k="lon" step="0.000001" type="number" value="${p.lon.toFixed(6)}"></td>` +
+      `<td style="width:34px"><input data-k="z" step="0.1" type="number" value="${p.z.toFixed(1)}"></td>` +
+      `<td class="res">${p.err !== undefined ? p.err.toFixed(1) : '\u2014'}</td>` +
+      `<td><button class="del" title="Delete pair">&times;</button></td>`;
+    tr.addEventListener('click', e => { if(e.target.tagName !== 'INPUT' && !e.target.classList.contains('del')) selectPair(i); });
+    tr.querySelector('.del').onclick = () => removePair(i);
+    tr.querySelectorAll('input').forEach(inp => inp.addEventListener('change', () => {
+      const v = parseFloat(inp.value);
+      if(isNaN(v)) return;
+      p[inp.dataset.k] = v;
+      p.marker.setLatLng([p.lat, p.lon]);
+      updateResiduals(); refreshTable(); drawImage();
+    }));
+    tb.appendChild(tr);
+  });
+}
+document.getElementById('btnClearPairs').onclick = () => {
+  state.pairs.forEach(p => map.removeLayer(p.marker));
+  state.pairs = []; state.selPair = -1;
+  updateResiduals(); refreshTable(); drawImage();
+};
+
+/* =====================================================================
+   CSV IMPORT / EXPORT
+   Expected header (order-free, tolerant): id, img_x, img_y, map_lat,
+   map_lng, map_altitude. Also accepts u/v, lat/lon, alt/elev, or a
+   direct z/height column. Altitudes become z = altitude - ground elev.
+   ===================================================================== */
+const datumInput = document.getElementById('datumN');
+state.datum = null;
+
+function parseCSVPoints(text){
+  const lines = text.trim().split(/\r?\n/).filter(l => l.trim());
+  if(lines.length < 2) throw new Error('CSV has no data rows.');
+  const delim = (lines[0].match(/;/g)||[]).length > (lines[0].match(/,/g)||[]).length ? ';' : ',';
+  const norm = s => s.toLowerCase().replace(/[^a-z]/g, '');
+  const head = lines[0].split(delim).map(norm);
+  const col = (...names) => { for(const n of names){ const i = head.indexOf(n); if(i >= 0) return i; } return -1; };
+  const iu = col('imgx','u','pixelx','imagex','px','x');
+  const iv = col('imgy','v','pixely','imagey','py','y');
+  const ila = col('maplat','lat','latitude');
+  const ilo = col('maplng','maplon','lng','lon','longitude');
+  const ial = col('mapaltitude','altitude','alt','elevation','elev');
+  const iz  = col('z','zheight','heightaboveground');
+  if(iu<0 || iv<0 || ila<0 || ilo<0)
+    throw new Error('Missing columns \u2014 need img_x, img_y, map_lat, map_lng. Got: ' + lines[0]);
+  const rows = [];
+  for(let i=1; i<lines.length; i++){
+    const c = lines[i].split(delim);
+    const u = parseFloat(c[iu]), v = parseFloat(c[iv]);
+    const la = parseFloat(c[ila]), lo = parseFloat(c[ilo]);
+    if([u,v,la,lo].some(isNaN)) continue;
+    rows.push({ u, v, la, lo,
+      alt: ial >= 0 ? parseFloat(c[ial]) : NaN,
+      z:   iz  >= 0 ? parseFloat(c[iz])  : NaN });
+  }
+  if(!rows.length) throw new Error('No valid rows found in CSV.');
+  return rows;
+}
+function importCSVText(text){
+  const rows = parseCSVPoints(text);
+  /* ground elevation datum for altitude -> z */
+  const alts = rows.map(r => r.alt).filter(a => isFinite(a));
+  if(alts.length){
+    const manual = parseFloat(datumInput.value);
+    state.datum = isFinite(manual) ? manual : Math.min(...alts);
+    datumInput.value = state.datum.toFixed(1);
+  }
+  /* auto-place the origin at the point centroid if not set yet */
+  if(!state.origin){
+    const cla = rows.reduce((s,r)=>s+r.la,0)/rows.length;
+    const clo = rows.reduce((s,r)=>s+r.lo,0)/rows.length;
+    setOrigin(cla, clo);
+  }
+  for(const r of rows){
+    addPair(r.u, r.v, r.la, r.lo);
+    const p = state.pairs[state.pairs.length-1];
+    p.alt = isFinite(r.alt) ? r.alt : undefined;
+    if(isFinite(r.z))        p.z = r.z;
+    else if(isFinite(r.alt)) p.z = r.alt - state.datum;
+  }
+  map.fitBounds(L.latLngBounds(rows.map(r => [r.la, r.lo])).pad(0.3));
+  updateResiduals(); refreshTable(); drawImage();
+  const zNote = alts.length ? ` \u00b7 z from altitude \u2212 ${state.datum.toFixed(1)} m ground elev` : '';
+  setMsg(`Imported ${rows.length} point pairs from CSV${zNote}.` + (state.img ? '' : ' Load the camera image to see them.'));
+}
+document.getElementById('btnImportCSV').onclick = () => document.getElementById('csvFile').click();
+document.getElementById('csvFile').onchange = e => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const rd = new FileReader();
+  rd.onload = () => { try{ importCSVText(rd.result); }catch(err){ setMsg('CSV import failed: ' + err.message); } };
+  rd.readAsText(file);
+  e.target.value = '';
+};
+/* editing ground elevation re-derives z for points imported with altitudes */
+datumInput.addEventListener('change', () => {
+  const d = parseFloat(datumInput.value);
+  if(!isFinite(d)) return;
+  state.datum = d;
+  state.pairs.forEach(p => { if(p.alt !== undefined) p.z = p.alt - d; });
+  updateResiduals(); refreshTable(); drawImage();
+});
+document.getElementById('btnExportCSV').onclick = () => {
+  if(!state.pairs.length) return setMsg('No point pairs to export.');
+  const hasDatum = isFinite(state.datum);
+  const head = 'id,img_x,img_y,map_lat,map_lng,' + (hasDatum ? 'map_altitude' : 'z');
+  const rows = state.pairs.map((p, i) =>
+    [i+1, p.u.toFixed(2), p.v.toFixed(2), p.lat.toFixed(8), p.lon.toFixed(8),
+     (hasDatum ? (state.datum + p.z) : p.z).toFixed(3)].join(','));
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([head + '\n' + rows.join('\n')], { type:'text/csv' }));
+  a.download = 'calibration-points.csv';
+  a.click();
+  setMsg('Point pairs exported as CSV.');
+};
+
+function updateResiduals(){
+  const pose = camPose();
+  let s = 0, n = 0;
+  state.pairs.forEach(p => {
+    p.err = undefined;
+    if(!pose || !state.origin) return;
+    const q = projectWorld(pairWorld(p));
+    if(q){ p.err = Math.hypot(q[0]-p.u, q[1]-p.v); s += p.err*p.err; n++; }
+  });
+  state.lastRMS = n ? Math.sqrt(s/n) : null;
+  document.getElementById('rmsFoot').textContent = state.lastRMS !== null ? `RMS ${state.lastRMS.toFixed(2)} px` : '';
+}
+function updateReadouts(){
+  document.getElementById('originReadout').textContent =
+    state.origin ? `${state.origin.lat.toFixed(6)}, ${state.origin.lon.toFixed(6)}` : 'not set';
+  document.getElementById('cameraReadout').textContent =
+    params.lat !== null ? `${params.lat.toFixed(6)}, ${params.lon.toFixed(6)} @ ${params.height.toFixed(1)} m` : 'not set';
+}
+
+/* =====================================================================
+   GEOCALIB SEED  (hosted Gradio Space, browser client)
+   Mirrors run_geocalib_remote(): estimates focal, k1, pitch, roll from
+   the single loaded image. Yaw/position can't come from one image and
+   are left untouched.
+   ===================================================================== */
+const GEOCALIB_URL = 'https://shrnik-geocalib.hf.space';   // Hugging Face Space
+/* Plain-fetch client for the Space's REST API. The @gradio/client library
+   sends every request with credentials:'include', but the Space's preflight
+   responses omit Access-Control-Allow-Credentials, so browsers block it.
+   Credential-less fetch avoids the whole problem (the Space is public). */
+async function geoCalibPredict(blob){
+  /* saved HF token (Settings) is attached when present — needed for private
+     Spaces / better rate limits; anonymous access keeps working without it */
+  const auth = hfToken() ? { Authorization: 'Bearer ' + hfToken() } : {};
+  const fd = new FormData();
+  fd.append('files', blob, 'frame.jpg');
+  const upRes = await fetch(`${GEOCALIB_URL}/gradio_api/upload`, { method: 'POST', headers: auth, body: fd });
+  if(!upRes.ok) throw new Error(`upload failed (HTTP ${upRes.status})`);
+  const [path] = await upRes.json();
+  const callRes = await fetch(`${GEOCALIB_URL}/gradio_api/call/process_results`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...auth },
+    body: JSON.stringify({ data: [
+      { path, meta: { _type: 'gradio.FileData' } },
+      'simple_radial',
+      false, false, false, false, false,
+    ]}),
+  });
+  if(!callRes.ok) throw new Error(`call failed (HTTP ${callRes.status})`);
+  const { event_id } = await callRes.json();
+  const evRes = await fetch(`${GEOCALIB_URL}/gradio_api/call/process_results/${event_id}`, { headers: auth });
+  if(!evRes.ok) throw new Error(`result stream failed (HTTP ${evRes.status})`);
+  const text = await evRes.text();
+  /* SSE stream: find the data payload of the "complete" (or "error") event */
+  let event = null;
+  for(const line of text.split('\n')){
+    if(line.startsWith('event:')) event = line.slice(6).trim();
+    else if(line.startsWith('data:') && (event === 'complete' || event === 'error')){
+      const payload = JSON.parse(line.slice(5));
+      if(event === 'error') throw new Error('Space reported an error: ' + JSON.stringify(payload));
+      return payload;
+    }
+  }
+  throw new Error('Space stream ended without a result (it may be sleeping — retry in a minute).');
+}
+function parseGeoCalibText(raw, sentH){
+  const num = label => {
+    const m = raw.match(new RegExp(label + '[^\\-\\d]{0,12}(-?\\d+(?:\\.\\d+)?)', 'i'));
+    return m ? parseFloat(m[1]) : null;
+  };
+  const out = { roll: num('roll'), pitch: num('pitch'), k1: num('k1') };
+  let f = num('focal');
+  if(f === null){
+    const vfov = num('vfov') ?? num('v[ _-]?fov') ?? num('\\bfov');
+    if(vfov !== null) f = (sentH/2) / Math.tan(vfov*D2R/2);
+  }
+  out.f = f;
+  return out;
+}
+async function imageBlobForUpload(){
+  /* cap the upload size; GeoCalib is scale-invariant except focal (rescaled after) */
+  const maxSide = 1440;
+  const sc = Math.min(1, maxSide / Math.max(state.imgW, state.imgH));
+  const c = document.createElement('canvas');
+  c.width = Math.round(state.imgW*sc); c.height = Math.round(state.imgH*sc);
+  c.getContext('2d').drawImage(state.img, 0, 0, c.width, c.height);
+  const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.92));
+  return { blob, sentW: c.width, sentH: c.height };
+}
+document.getElementById('btnGeoCalib').onclick = async () => {
+  const btn = document.getElementById('btnGeoCalib');
+  const box = document.getElementById('geoResult');
+  const fail = m => { box.className = 'show poor'; box.innerHTML = m; };
+  if(!state.img) return fail('Load a camera image first (step 1).');
+  btn.disabled = true;
+  btn.textContent = 'Contacting GeoCalib\u2026';
+  box.className = 'show';
+  box.innerHTML = 'Uploading image to the GeoCalib Space \u2014 this can take a minute on a cold start\u2026';
+  try{
+    const { blob, sentH } = await imageBlobForUpload();
+    const data = await geoCalibPredict(blob);
+    const raw = String(data[0] ?? '');
+    console.log('GeoCalib raw output:\n' + raw);
+    const est = parseGeoCalibText(raw, sentH);
+    if(est.f === null && est.pitch === null && est.roll === null)
+      throw new Error('Could not parse the Space\u2019s response (see console for raw text).');
+    const applied = [];
+    if(est.f !== null){ params.f = est.f * (state.imgH / sentH); applied.push(`f ${params.f.toFixed(1)} px (hfov ${(2*Math.atan(state.imgW/2/params.f)*R2D).toFixed(1)}\u00b0)`); }
+    if(est.k1 !== null){ params.k1 = est.k1; params.k2 = 0; applied.push(`k1 ${est.k1.toFixed(3)}`); }
+    if(est.pitch !== null){ params.pitch = est.pitch; applied.push(`pitch ${est.pitch.toFixed(1)}\u00b0`); }
+    if(est.roll !== null){ params.roll = est.roll; applied.push(`roll ${est.roll.toFixed(2)}\u00b0`); }
+    params.cx = state.imgW/2; params.cy = state.imgH/2;
+    document.getElementById('optHorizon').checked = true;
+    syncParamUI(); onParamsChanged(); refreshTable();
+    box.className = 'show good';
+    box.innerHTML = '<div class="rms">GeoCalib seed applied</div><div>' + applied.join(' \u00b7 ') + '</div>' +
+      '<div style="margin-top:4px">Check the horizon overlay against the skyline \u2014 if it tilts the wrong way, negate roll or pitch. Yaw and position still come from you or from step 5.</div>';
+    setMsg('GeoCalib estimate applied to the parameter panel.');
+  }catch(err){
+    console.error(err);
+    fail('GeoCalib call failed: ' + (err.message || err) +
+      '<div style="margin-top:4px">Common causes: no internet, the Space is sleeping/overloaded (retry in a minute), or its API changed. Values from your own Python pipeline can always be typed into the sliders directly.</div>');
+  }finally{
+    btn.disabled = false;
+    btn.textContent = 'Estimate with GeoCalib (AI)';
+  }
+};
+
+/* =====================================================================
+   CALIBRATION  (OpenCV.js solvePnP when available, JS homography fallback)
+   ===================================================================== */
+function solvePoseJS(obj, img, f, k1, k2){
+  /* seed: planar homography (ignores z) */
+  const H = homographyDLT(obj.map(p => [p[0], p[1]]), img);
+  return poseFromHomography(H, f, f*params.aspect, params.cx, params.cy);
+}
+function solvePoseCV(obj, img, f, k1, k2, seed){
+  const n = obj.length;
+  const objM = cv.matFromArray(n, 3, cv.CV_64F, obj.flat());
+  const imgM = cv.matFromArray(n, 2, cv.CV_64F, img.flat());
+  const K    = cv.matFromArray(3, 3, cv.CV_64F, [f,0,params.cx, 0,f*params.aspect,params.cy, 0,0,1]);
+  const dist = cv.matFromArray(4, 1, cv.CV_64F, [k1, k2, 0, 0]);
+  const rvec = new cv.Mat(3, 1, cv.CV_64F), tvec = new cv.Mat(3, 1, cv.CV_64F);
+  let out = null;
+  try{
+    /* seed rvec/tvec from the homography pose */
+    const Rm = cv.matFromArray(3, 3, cv.CV_64F, seed.R.flat());
+    cv.Rodrigues(Rm, rvec);
+    const t = [0,1,2].map(i => -(seed.R[i][0]*seed.C[0] + seed.R[i][1]*seed.C[1] + seed.R[i][2]*seed.C[2]));
+    tvec.data64F.set(t);
+    Rm.delete();
+    const ok = cv.solvePnP(objM, imgM, K, dist, rvec, tvec, true, cv.SOLVEPNP_ITERATIVE);
+    if(ok){
+      const Rout = new cv.Mat();
+      cv.Rodrigues(rvec, Rout);
+      const R = [[...Rout.data64F.slice(0,3)], [...Rout.data64F.slice(3,6)], [...Rout.data64F.slice(6,9)]];
+      const tv = [...tvec.data64F];
+      const C = [0,1,2].map(j => -(R[0][j]*tv[0] + R[1][j]*tv[1] + R[2][j]*tv[2]));
+      Rout.delete();
+      if(C[2] > 0) out = { R, C };
+    }
+  }catch(e){ console.warn('solvePnP failed, using JS fallback:', e); }
+  objM.delete(); imgM.delete(); K.delete(); dist.delete(); rvec.delete(); tvec.delete();
+  return out;
+}
+function evalSolution(obj, img, f, k1, k2){
+  /* 1. planar homography seed  2. OpenCV solvePnP (if loaded)  3. LM polish */
+  const seed = solvePoseJS(obj, img, f, k1, k2);
+  const mid = (state.cvReady && typeof cv !== 'undefined') ? (solvePoseCV(obj, img, f, k1, k2, seed) || seed) : seed;
+  const ref = refinePoseLM(obj, img, mid.C, yprFromRot(mid.R), f, f*params.aspect, params.cx, params.cy, k1, k2);
+  return { pose: { C: ref.C, R: rotFromYPR(ref.ypr[0], ref.ypr[1], ref.ypr[2]) }, rms: ref.rms };
+}
+document.getElementById('btnCalibrate').onclick = () => {
+  const box = document.getElementById('calibResult');
+  const fail = m => { box.className = 'show poor'; box.innerHTML = m; };
+  if(!state.img)   return fail('Load a camera image first.');
+  if(!state.origin) return fail('Set the origin first (step 2).');
+  if(state.pairs.length < 4) return fail(`Need at least 4 point pairs (have ${state.pairs.length}).`);
+  const solveF = document.getElementById('optFocal').checked;
+  const solveD = document.getElementById('optDist').checked;
+  if(solveD && state.pairs.length < 6) return fail('Solving distortion needs at least 6 pairs.');
+
+  const obj = state.pairs.map(pairWorld);
+  const img = state.pairs.map(p => [p.u, p.v]);
+  let f = params.f, k1 = solveD ? 0 : params.k1, k2 = solveD ? 0 : params.k2;
+
+  if(solveF) f = goldenMin(x => evalSolution(obj, img, x, k1, k2).rms, state.imgW*0.25, state.imgW*5, 48);
+  if(solveD){
+    for(let round=0; round<2; round++){
+      k1 = goldenMin(x => evalSolution(obj, img, f, x, k2).rms, -0.5, 0.5, 40);
+      k2 = goldenMin(x => evalSolution(obj, img, f, k1, x).rms, -0.5, 0.5, 40);
+      if(solveF) f = goldenMin(x => evalSolution(obj, img, x, k1, k2).rms, state.imgW*0.25, state.imgW*5, 40);
+    }
+  }
+  const { pose, rms } = evalSolution(obj, img, f, k1, k2);
+
+  /* write solution back into the parameter panel */
+  const [yaw, pitch, roll] = yprFromRot(pose.R);
+  const [lat, lon] = enuToLL(pose.C[0], pose.C[1], state.origin);
+  Object.assign(params, { f, k1, k2, yaw, pitch, roll, lat, lon, height: pose.C[2] });
+  syncParamUI(); onParamsChanged(); refreshTable();
+
+  const method = (state.cvReady ? 'OpenCV.js solvePnP' : 'JS homography (OpenCV not loaded)');
+  const good = rms < 10;
+  box.className = 'show ' + (good ? 'good' : 'poor');
+  box.innerHTML =
+    `<div class="rms">RMS ${rms.toFixed(2)} px</div>` +
+    `<div>method&nbsp;&nbsp;${method}</div>` +
+    `<div>f ${f.toFixed(1)} px &middot; hfov ${(2*Math.atan(state.imgW/2/f)*R2D).toFixed(1)}&deg;</div>` +
+    `<div>cam ${lat.toFixed(6)}, ${lon.toFixed(6)} @ ${pose.C[2].toFixed(2)} m</div>` +
+    `<div>yaw ${yaw.toFixed(1)}&deg; pitch ${pitch.toFixed(1)}&deg; roll ${roll.toFixed(2)}&deg;</div>` +
+    (good ? '' : '<div style="margin-top:4px">High error &mdash; check pairs for a mismatched click, spread points wider, or set per-point z heights.</div>');
+  setMsg('Calibration applied to the parameter panel.');
+};
+
+/* =====================================================================
+   OSM CONTEXT  (Overpass API: building footprints + landmark nodes)
+   Landmark classes mirror fetch_context.py's DEFAULT_OSM_FILTERS.
+   ===================================================================== */
+const OSM_LANDMARK_FILTERS = [
+  'node["highway"="street_lamp"]',
+  'node["man_made"="manhole"]',
+  'node["man_made"="utility_pole"]',
+  'node["power"="pole"]',
+  'node["highway"="traffic_signals"]',
+  'node["highway"="stop"]',
+  'node["traffic_sign"]',
+  'node["amenity"="bench"]',
+  'node["natural"="tree"]',
+];
+const LM_STYLE = {
+  street_lamp:'#f59f00', traffic_signals:'#e03131', stop:'#e03131',
+  manhole:'#495057', utility_pole:'#8d6e3f', pole:'#868e96',
+  tree:'#2f9e44', bench:'#9c36b5', traffic_sign:'#1971c2', sign:'#1971c2',
+};
+const lmColor = label => LM_STYLE[label] || '#0b7285';
+const lmLayer = L.layerGroup().addTo(map);
+state.landmarks = [];   // {label, lat, lon}
+
+const radR = document.getElementById('osmRadiusR'), radN = document.getElementById('osmRadiusN');
+radR.oninput = () => { radN.value = radR.value; updateCameraOnMap(); };
+radN.onchange = () => { radR.value = radN.value; updateCameraOnMap(); };
+
+function buildingHeight(tags){
+  if(!tags) return 6;
+  const h = parseFloat(tags.height); if(!isNaN(h)) return h;
+  const l = parseFloat(tags['building:levels']); if(!isNaN(l)) return l*3;
+  return 6;
+}
+function landmarkLabel(tags){
+  return tags.man_made || tags.highway || tags.power || tags.natural ||
+         tags.amenity || (tags.traffic_sign ? 'traffic_sign' : 'node');
+}
+function addLandmark(label, lat, lon){
+  const lm = { label, lat, lon };
+  const mk = L.circleMarker([lat, lon], {
+    radius: 4, weight: 1.5, color: '#fff', fillColor: lmColor(label), fillOpacity: 0.95,
+  }).addTo(lmLayer);
+  mk.bindTooltip(label.replace(/_/g, ' '), { direction: 'top', offset: [0, -4] });
+  mk.on('click', e => {
+    /* clicking a landmark while placing a pair uses its exact coordinates */
+    if(state.mode === 'pair-map' && state.pendingPixel){
+      L.DomEvent.stop(e);
+      addPair(state.pendingPixel[0], state.pendingPixel[1], lat, lon);
+      state.pendingPixel = null;
+      setMode('pair-image');
+      setMsg(`Pair anchored to OSM ${label.replace(/_/g,' ')} \u2014 exact coordinates.`);
+    }
+  });
+  state.landmarks.push(lm);
+}
+document.getElementById('btnFetchOSM').onclick = async () => {
+  const btn = document.getElementById('btnFetchOSM');
+  const lat = params.lat ?? state.origin?.lat, lon = params.lon ?? state.origin?.lon;
+  if(lat === undefined || lat === null) return setMsg('Place the camera or origin first.');
+  const r = +radN.value;
+  btn.disabled = true; btn.textContent = 'Fetching\u2026';
+  try{
+    /* bbox covering ±radius around the camera: [bbox:south,west,north,east] */
+    const dLat = r / 111320, dLon = r / (111320 * Math.cos(lat * D2R));
+    const bbox = [lat - dLat, lon - dLon, lat + dLat, lon + dLon]
+      .map(v => v.toFixed(7)).join(',');
+    var query = `
+      [bbox:${bbox}]
+      [out:json]
+      [timeout:90]
+      ;
+      (
+        way["building"];
+        way["highway"];
+        ${OSM_LANDMARK_FILTERS.map(f => f + ';').join('\n        ')}
+      );
+      out body geom;
+    `;
+    /* Content-Type must be form-urlencoded — a bare string body is sent as
+       text/plain and overpass-api.de answers 406. Mirrors tried in order. */
+    const ENDPOINTS = [
+      'https://overpass-api.de/api/interpreter',
+      'https://overpass.kumi.systems/api/interpreter',
+      'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+    ];
+    let data = null, lastErr = null;
+    for(const ep of ENDPOINTS){
+      try{
+        data = await fetch(ep, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: 'data=' + encodeURIComponent(query),
+        }).then(resp => {
+          if(!resp.ok) throw new Error('HTTP ' + resp.status + ' from ' + new URL(ep).host);
+          return resp.json();
+        });
+        break;
+      }catch(err){ lastErr = err; }
+    }
+    if(!data) throw lastErr || new Error('all Overpass endpoints failed');
+    clearOSM();
+    for(const el of data.elements || []){
+      if(el.type === 'way' && el.geometry && el.geometry.length >= 3 && el.tags?.building){
+        const ring = el.geometry.map(g => [g.lat, g.lon]);
+        const layer = L.polygon(ring, { color:'#0b7285', weight:1.5, fillOpacity:.08 }).addTo(fpLayer);
+        state.footprints.push({ ring, height: buildingHeight(el.tags), layer });
+      } else if(el.type === 'way' && el.geometry && el.geometry.length >= 2 && el.tags?.highway){
+        const pts = el.geometry.map(g => [g.lat, g.lon]);
+        const layer = L.polyline(pts, { color:'#e8590c', weight:2, opacity:.8 }).addTo(roadLayer);
+        state.roads.push({ pts, layer });
+      } else if(el.type === 'node' && el.tags){
+        addLandmark(landmarkLabel(el.tags), el.lat, el.lon);
+      }
+    }
+    document.getElementById('fpCount').textContent = state.footprints.length;
+    document.getElementById('roadCount').textContent = state.roads.length;
+    document.getElementById('lmCount').textContent = state.landmarks.length;
+    setMsg(`OSM: ${state.footprints.length} buildings, ${state.roads.length} roads, ${state.landmarks.length} landmarks. Pair clicks now snap to them.`);
+    drawImage();
+  }catch(err){
+    setMsg('Overpass fetch failed: ' + err.message + ' \u2014 try again in a moment (public server rate-limits).');
+  }finally{
+    btn.disabled = false; btn.textContent = 'Fetch buildings + roads + landmarks';
+  }
+};
+function clearOSM(){
+  fpLayer.clearLayers();
+  roadLayer.clearLayers();
+  lmLayer.clearLayers();
+  state.footprints = [];
+  state.roads = [];
+  state.landmarks = [];
+  document.getElementById('fpCount').textContent = '0';
+  document.getElementById('roadCount').textContent = '0';
+  document.getElementById('lmCount').textContent = '0';
+}
+document.getElementById('btnClearOSM').onclick = () => { clearOSM(); drawImage(); };
+document.getElementById('optShowFp').onchange = drawImage;
+document.getElementById('optShowLm').onchange = drawImage;
+document.getElementById('optOnlyRoads').onchange = () => {
+  if(document.getElementById('optOnlyRoads').checked){
+    map.removeLayer(fpLayer); map.removeLayer(lmLayer);
+  } else {
+    fpLayer.addTo(map); lmLayer.addTo(map);
+  }
+  drawImage();
+};
+document.getElementById('optHorizon').onchange = drawImage;
+
+/* snap a map click to the nearest landmark or building corner (screen px) */
+function snapLatLng(latlng){
+  if(!document.getElementById('optSnap').checked) return null;
+  /* landmarks & footprints are hidden in roads-only view — don't snap to them */
+  if(document.getElementById('optOnlyRoads').checked) return null;
+  const clickPt = map.latLngToContainerPoint(latlng);
+  let best = null, bestD = 14;   // px threshold
+  const consider = (la, lo, label) => {
+    const p = map.latLngToContainerPoint([la, lo]);
+    const d = clickPt.distanceTo(p);
+    if(d < bestD){ bestD = d; best = { lat: la, lon: lo, label }; }
+  };
+  for(const lm of state.landmarks) consider(lm.lat, lm.lon, lm.label.replace(/_/g,' '));
+  for(const fp of state.footprints) for(const v of fp.ring) consider(v[0], v[1], 'building corner');
+  return best;
+}
+
+/* =====================================================================
+   EXPORT / IMPORT
+   ===================================================================== */
+document.getElementById('btnExport').onclick = () => {
+  let imageData = null;
+  if(state.img){
+    const c = document.createElement('canvas');
+    c.width = state.imgW; c.height = state.imgH;
+    c.getContext('2d').drawImage(state.img, 0, 0);
+    imageData = c.toDataURL('image/jpeg', 0.9);
+  }
+  const proj = {
+    app: 'ground-camera-calibrator', version: 1,
+    params: { ...params }, origin: state.origin,
+    pairs: state.pairs.map(p => ({ u:p.u, v:p.v, lat:p.lat, lon:p.lon, z:p.z, alt:p.alt })),
+    datum: state.datum,
+    osmRadius: +radN.value, image: imageData,
+  };
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(proj)], { type:'application/json' }));
+  a.download = 'camera-calibration.json';
+  a.click();
+  setMsg('Project exported.');
+};
+document.getElementById('btnImport').onclick = () => document.getElementById('importFile').click();
+document.getElementById('importFile').onchange = e => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    try{
+      const proj = JSON.parse(rd.result);
+      Object.assign(params, proj.params || {});
+      document.getElementById('btnClearPairs').click();
+      clearOSM();
+      if(proj.origin) setOrigin(proj.origin.lat, proj.origin.lon);
+      if(proj.osmRadius){ radN.value = proj.osmRadius; radR.value = proj.osmRadius; }
+      if(isFinite(proj.datum)){ state.datum = proj.datum; datumInput.value = proj.datum.toFixed(1); }
+      const restorePairs = () => (proj.pairs || []).forEach(p => { addPair(p.u, p.v, p.lat, p.lon); const q = state.pairs.at(-1); q.z = p.z || 0; q.alt = p.alt; });
+      if(proj.image){
+        const im = new Image();
+        im.onload = () => {
+          state.img = im; state.imgW = im.naturalWidth; state.imgH = im.naturalHeight;
+          document.getElementById('dropHint').style.display = 'none';
+          document.getElementById('imgSize').textContent = `${im.naturalWidth} × ${im.naturalHeight}`;
+          fitImage(); restorePairs(); syncParamUI(); onParamsChanged(); refreshTable();
+        };
+        im.src = proj.image;
+      } else { restorePairs(); syncParamUI(); onParamsChanged(); refreshTable(); }
+      if(proj.origin) map.setView([proj.origin.lat, proj.origin.lon], 18);
+      setMsg('Project imported.');
+    }catch(err){ setMsg('Import failed: ' + err.message); }
+  };
+  rd.readAsText(file);
+  e.target.value = '';
+};
+
+/* =====================================================================
+   SETTINGS  (HF token, kept in localStorage — never leaves the browser)
+   ===================================================================== */
+const HF_TOKEN_KEY = 'ground-camera-calibrator.hfToken';
+function hfToken(){ return localStorage.getItem(HF_TOKEN_KEY) || ''; }
+(function initSettings(){
+  const input = document.getElementById('hfTokenInput');
+  const status = document.getElementById('tokenStatus');
+  const show = () => {
+    const t = hfToken();
+    input.value = t;
+    status.textContent = t ? `saved (…${t.slice(-4)})` : 'not set';
+  };
+  document.getElementById('btnSaveToken').onclick = () => {
+    const t = input.value.trim();
+    if(!t) return setMsg('Token is empty — use Clear to remove the saved one.');
+    localStorage.setItem(HF_TOKEN_KEY, t);
+    show();
+    setMsg('HF token saved to this browser.');
+  };
+  document.getElementById('btnClearToken').onclick = () => {
+    localStorage.removeItem(HF_TOKEN_KEY);
+    show();
+    setMsg('HF token cleared.');
+  };
+  show();
+})();
+
+/* =====================================================================
+   OPENCV.JS LOADER  (app stays fully usable with the JS fallback)
+   ===================================================================== */
+(function loadOpenCV(){
+  const chip = document.getElementById('cvChip');
+  const s = document.createElement('script');
+  s.src = 'https://docs.opencv.org/4.9.0/opencv.js';
+  s.async = true;
+  const ready = () => { state.cvReady = true; chip.textContent = 'OpenCV.js: ready'; chip.className = 'chip ok'; };
+  s.onload = () => {
+    if(typeof cv === 'undefined') return fallback();
+    if(cv instanceof Promise) cv.then(m => { window.cv = m; ready(); });
+    else if(cv.Mat) ready();
+    else cv.onRuntimeInitialized = ready;
+  };
+  const fallback = () => { chip.textContent = 'OpenCV.js unavailable \u2014 using JS solver'; chip.className = 'chip warn'; };
+  s.onerror = fallback;
+  document.head.appendChild(s);
+})();
+
+/* =====================================================================
+   INIT
+   ===================================================================== */
+buildParamUI();
+updateReadouts();
+new ResizeObserver(resizeCanvas).observe(canvas.parentElement);
+window.addEventListener('resize', () => { resizeCanvas(); map.invalidateSize(); });
+resizeCanvas();
+setMsg('Load an image (step 1) and set the origin on the map (step 2).');
+</script>
+</body>
+</html>
