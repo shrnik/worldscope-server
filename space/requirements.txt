@@ -5,3 +5,4 @@ numpy>=2.0
 pandas>=2.2
 pyarrow>=18.0
 httpx>=0.28
+plotly>=5.24

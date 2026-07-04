@@ -213,6 +213,14 @@ def get_all_cameras() -> list[dict[str, Any]]:
     return [c for c in [*sheet, *faa, *volcview, *alertwest] if c.get("url")]
 
 
+def _to_float(value: Any) -> float | None:
+    """Coerce lat/lon to float (sheet rows are strings, API rows are numbers)."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def download_one(camera: dict[str, Any], ts_iso: str, ts_file: str) -> dict[str, Any] | None:
     """Download a snapshot to the bucket; return a manifest row, or None on failure."""
     try:
@@ -232,6 +240,10 @@ def download_one(camera: dict[str, Any], ts_iso: str, ts_file: str) -> dict[str,
         "camera_id": camera["camera_id"],
         "url": f"{HF_ENDPOINT}/buckets/{HF_BUCKET}/resolve/{image_path}",
         "image_path": image_path,
+        # Typed columns (carried through to embeddings.parquet) so the Space
+        # can plot results on a map without parsing the metadata JSON.
+        "lat": _to_float(camera.get("lat")),
+        "lon": _to_float(camera.get("lon")),
         # JSON string (not a struct) so heterogeneous types across sources
         # (e.g. str vs float lat/lon) don't break parquet schema inference.
         "metadata": json.dumps(

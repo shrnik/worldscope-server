@@ -18,6 +18,7 @@ import gradio as gr
 import httpx
 import numpy as np
 import pandas as pd
+import plotly.express as px
 import torch
 from transformers import CLIPModel, CLIPProcessor
 
@@ -69,14 +70,32 @@ def load_index() -> str:
                 md = json.loads(md)
             except json.JSONDecodeError:
                 md = {}
-        meta.append({"url": row.get("url"), "metadata": md or {}, "ts": row.get("ts")})
+        md = md or {}
+        # Typed lat/lon columns exist in newer parquets; fall back to the
+        # metadata JSON for files written before they were added.
+        lat = _coord(row.get("lat"), md.get("lat"))
+        lon = _coord(row.get("lon"), md.get("lon"))
+        meta.append(
+            {"url": row.get("url"), "metadata": md, "ts": row.get("ts"), "lat": lat, "lon": lon}
+        )
     _meta = meta
     return f"Loaded {len(_meta)} images"
 
 
+def _coord(*candidates) -> float | None:
+    for value in candidates:
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            continue
+        if not np.isnan(value):
+            return value
+    return None
+
+
 def search(query: str):
     if not query.strip():
-        return []
+        return [], None
     if not _meta:
         load_index()
     scores = _embeddings @ embed_text(query)
@@ -88,7 +107,37 @@ def search(query: str):
         m = _meta[i]
         name = (m["metadata"].get("camera_name") or "camera").strip()
         results.append((m["url"], f"{name} · {_fmt_ts(m.get('ts'))} · {scores[i]:.2f}"))
-    return results
+    return results, map_figure(scores)
+
+
+def map_figure(scores: np.ndarray):
+    """Plot every camera with known coordinates, colored by similarity to the query."""
+    rows = [
+        {
+            "lat": m["lat"],
+            "lon": m["lon"],
+            "similarity": float(scores[i]),
+            "camera": (m["metadata"].get("camera_name") or "camera").strip(),
+        }
+        for i, m in enumerate(_meta)
+        if m["lat"] is not None and m["lon"] is not None
+    ]
+    if not rows:
+        return None
+    df = pd.DataFrame(rows)
+    fig = px.scatter_map(
+        df,
+        lat="lat",
+        lon="lon",
+        color="similarity",
+        hover_name="camera",
+        color_continuous_scale="Viridis",
+        zoom=2,
+        height=600,
+    )
+    fig.update_traces(marker={"size": 8})
+    fig.update_layout(margin={"l": 0, "r": 0, "t": 0, "b": 0})
+    return fig
 
 
 def _fmt_ts(ts) -> str:
@@ -120,9 +169,10 @@ with gr.Blocks(title="Worldscope Search") as demo:
         btn = gr.Button("Search", variant="primary", scale=1)
     status = gr.Markdown()
     gallery = gr.Gallery(label="Results", columns=4, height=700, object_fit="cover")
+    map_plot = gr.Plot(label="Detections map (color = similarity)")
 
-    btn.click(search, inputs=query, outputs=gallery)
-    query.submit(search, inputs=query, outputs=gallery)
+    btn.click(search, inputs=query, outputs=[gallery, map_plot])
+    query.submit(search, inputs=query, outputs=[gallery, map_plot])
     demo.load(load_index, outputs=status)
 
 
