@@ -181,6 +181,17 @@ footer .grow{flex:1}
   #workspace{grid-template-columns:1fr;grid-template-rows:52vh 52vh}
   #imagePane{border-right:none;border-bottom:1px solid var(--line)}
 }
+.agentlog{max-height:280px;overflow-y:auto;margin-top:8px;padding:6px 8px;background:rgba(0,0,0,.25);
+  border:1px solid rgba(255,255,255,.08);border-radius:6px;font-size:11.5px;line-height:1.45}
+.agentlog:empty{display:none}
+.agentlog .al-text{margin:5px 0;white-space:pre-wrap}
+.agentlog .al-tool{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin:2px 0}
+.agentlog .al-tool.err{color:#ff8787}
+.agentlog .al-final{margin:6px 0 2px;padding-top:5px;border-top:1px solid rgba(255,255,255,.12)}
+.ailm{border-top:1px solid rgba(255,255,255,.08);padding:7px 0 5px;font-size:12px}
+.ailm-desc{color:var(--muted);margin:2px 0 4px}
+.ailm-out{font-family:var(--mono);font-size:11px;color:var(--muted);margin-top:4px}
+.ailm-out a{color:#74c0fc}
 </style>
 </head>
 <body>
@@ -281,6 +292,32 @@ footer .grow{flex:1}
   </details>
 
   <details class="sec">
+    <summary><span class="step">7</span>AI landmarks<span class="caret">&#9656;</span></summary>
+    <div class="sec-body">
+      <p class="hint">A vision LLM (HF Inference Providers) spots fixed landmarks in the frame, SAM3 segments them to exact pixels, and Wikipedia supplies info &mdash; including coordinates, so a landmark can become a calibration pair in one click. Needs the HF token from Settings.</p>
+      <div class="prow"><label>VLM model</label><input type="text" id="vlmModel" value="Qwen/Qwen2.5-VL-7B-Instruct" style="flex:1" spellcheck="false"></div>
+      <div class="btnrow">
+        <button class="act primary" id="btnDetectLm">Identify landmarks</button>
+        <button class="act" id="btnClearAiLm">Clear</button>
+      </div>
+      <div id="aiLmList"></div>
+    </div>
+  </details>
+
+  <details class="sec">
+    <summary><span class="step">8</span>Agent auto-calibrate<span class="caret">&#9656;</span></summary>
+    <div class="sec-body">
+      <p class="hint">Claude runs the whole calibration autonomously: seeds with GeoCalib, looks at the frame, pulls OSM / Wikipedia / web-search coordinates, segments exact pixels with SAM3, adds pairs (incl. sun/moon if the capture time is known), solves, and visually verifies. Needs the Claude key from Settings; every detection appears live on the image.</p>
+      <textarea id="agentGoal" rows="3" placeholder="Optional notes: camera location hints, capture time (for sun/moon), what it's looking at&hellip;" style="width:100%;resize:vertical;font-size:12px"></textarea>
+      <div class="btnrow">
+        <button class="act primary" id="btnAgentRun">Auto-calibrate</button>
+        <button class="act" id="btnAgentStop" disabled>Stop</button>
+      </div>
+      <div class="agentlog" id="agentLog"></div>
+    </div>
+  </details>
+
+  <details class="sec">
     <summary><span class="step">&#9881;</span>Settings<span class="caret">&#9656;</span></summary>
     <div class="sec-body">
       <p class="hint">Hugging Face access token. Stored only in this browser (localStorage) &mdash; never included in exported projects.</p>
@@ -290,6 +327,14 @@ footer .grow{flex:1}
         <button class="act" id="btnClearToken">Clear</button>
       </div>
       <div class="kv"><span>Status</span><b id="tokenStatus">not set</b></div>
+      <p class="hint" style="margin-top:10px">Anthropic API key &mdash; powers the auto-calibrate agent (section 8). Same rules: browser-only, never exported.</p>
+      <div class="prow"><label>Claude key</label><input type="password" id="anthropicKeyInput" placeholder="sk-ant-..." autocomplete="off" style="flex:1"></div>
+      <div class="btnrow">
+        <button class="act primary" id="btnSaveAntKey">Save key</button>
+        <button class="act" id="btnClearAntKey">Clear</button>
+      </div>
+      <div class="kv"><span>Status</span><b id="antKeyStatus">not set</b></div>
+      <div class="prow"><label>Agent model</label><input type="text" id="agentModel" value="claude-opus-4-8" spellcheck="false" style="flex:1"></div>
     </div>
   </details>
 
@@ -321,6 +366,7 @@ footer .grow{flex:1}
 </footer>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/suncalc@1.9.0/suncalc.min.js"></script>
 <script>
 'use strict';
 /* =====================================================================
@@ -510,6 +556,7 @@ const state = {
   pendingPixel: null,        // [u,v] awaiting map click
   footprints: [],            // {ring:[[lat,lon]..], height, layer}
   roads: [],                 // {pts:[[lat,lon]..], layer}
+  aiMarks: [],               // {name, u, v} — SAM3-segmented landmark pixels
   lastRMS: null,
   cvReady: false,
 };
@@ -602,6 +649,7 @@ function onParamsChanged(){
   drawImage();
   updateCameraOnMap();
   updateReadouts();
+  scheduleAutosave();
 }
 
 /* =====================================================================
@@ -779,6 +827,32 @@ function drawImage(){
     }
   }
 
+  /* AI-detected landmark pixels (magenta rings, image space — no pose needed) */
+  if(state.aiMarks.length){
+    /* SAM3 masks first: translucent tinted overlays, scaled from the
+       downscaled AI frame up to full resolution */
+    for(const m of state.aiMarks){
+      if(!m.mask) continue;
+      ctx.save();
+      ctx.translate(viewT.tx, viewT.ty);
+      const s = viewT.s * (state.imgW / m.mask.width);
+      ctx.scale(s, s);
+      ctx.drawImage(m.mask, 0, 0);
+      ctx.restore();
+    }
+    ctx.font = '600 10px ui-monospace,Menlo,monospace';
+    for(const m of state.aiMarks){
+      const [x,y] = toScreen(m.u, m.v);
+      ctx.strokeStyle = '#d6336c'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI*2); ctx.stroke();
+      ctx.fillStyle = '#d6336c';
+      ctx.beginPath(); ctx.arc(x, y, 1.5, 0, Math.PI*2); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = 2.5;
+      ctx.strokeText(m.name, x+9, y-6);
+      ctx.fillText(m.name, x+9, y-6);
+    }
+  }
+
   /* point pairs: clicked crosshair + reprojection */
   state.pairs.forEach((p, i) => {
     const col = pairColor(i);
@@ -801,6 +875,14 @@ function drawImage(){
       ctx.beginPath(); ctx.arc(x, y, 13, 0, Math.PI*2); ctx.stroke();
     }
     drawCross(x, y, col, String(i+1));
+    if(p.celestial){
+      const glyph = p.celestial === 'moon' ? '☾' : '☀';
+      ctx.font = '16px serif';
+      ctx.strokeStyle = 'rgba(0,0,0,.65)'; ctx.lineWidth = 3;
+      ctx.strokeText(glyph, x + 9, y + 15);
+      ctx.fillStyle = p.celestial === 'moon' ? '#ced4da' : '#ffd43b';
+      ctx.fillText(glyph, x + 9, y + 15);
+    }
   });
 
   /* pending half-pair */
@@ -881,7 +963,17 @@ function loadImageFile(file){
     if(params.f === 1200) params.f = im.naturalWidth * 0.85;
     syncParamUI();
     fitImage(); onParamsChanged();
-    setMsg('Image loaded. Set the origin on the map (step 2).');
+    /* restore any earlier progress on this exact image */
+    autosaveKey = computeImageKey();
+    const saved = localStorage.getItem(autosaveKey);
+    let restored = false;
+    if(saved){
+      try{ restoreProgress(JSON.parse(saved)); restored = true; }
+      catch(e){ console.warn('autosave restore failed:', e); }
+    }
+    setMsg(restored
+      ? `Image loaded — restored previous progress (${state.pairs.length} pairs, saved ${JSON.parse(saved).savedAt.slice(0,16).replace('T',' ')} UTC). Clear pairs to start fresh.`
+      : 'Image loaded. Set the origin on the map (step 2).');
   };
   im.src = url;
 }
@@ -1067,6 +1159,7 @@ function refreshTable(){
     }));
     tb.appendChild(tr);
   });
+  scheduleAutosave();
 }
 document.getElementById('btnClearPairs').onclick = () => {
   state.pairs.forEach(p => map.removeLayer(p.marker));
@@ -1258,6 +1351,26 @@ async function imageBlobForUpload(){
   const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.92));
   return { blob, sentW: c.width, sentH: c.height };
 }
+/* single-image f / k1 / pitch / roll estimate, applied to params */
+async function geoCalibSeed(){
+  if(!state.img) throw new Error('no camera image loaded');
+  const { blob, sentH } = await imageBlobForUpload();
+  const data = await geoCalibPredict(blob);
+  const raw = String(data[0] ?? '');
+  console.log('GeoCalib raw output:\n' + raw);
+  const est = parseGeoCalibText(raw, sentH);
+  if(est.f === null && est.pitch === null && est.roll === null)
+    throw new Error('could not parse the GeoCalib response (see console for raw text)');
+  const applied = [];
+  if(est.f !== null){ params.f = est.f * (state.imgH / sentH); applied.push(`f ${params.f.toFixed(1)} px (hfov ${(2*Math.atan(state.imgW/2/params.f)*R2D).toFixed(1)}°)`); }
+  if(est.k1 !== null){ params.k1 = est.k1; params.k2 = 0; applied.push(`k1 ${est.k1.toFixed(3)}`); }
+  if(est.pitch !== null){ params.pitch = est.pitch; applied.push(`pitch ${est.pitch.toFixed(1)}°`); }
+  if(est.roll !== null){ params.roll = est.roll; applied.push(`roll ${est.roll.toFixed(2)}°`); }
+  params.cx = state.imgW/2; params.cy = state.imgH/2;
+  document.getElementById('optHorizon').checked = true;
+  syncParamUI(); onParamsChanged(); refreshTable();
+  return { applied, f: params.f, k1: params.k1, pitch: params.pitch, roll: params.roll };
+}
 document.getElementById('btnGeoCalib').onclick = async () => {
   const btn = document.getElementById('btnGeoCalib');
   const box = document.getElementById('geoResult');
@@ -1268,21 +1381,7 @@ document.getElementById('btnGeoCalib').onclick = async () => {
   box.className = 'show';
   box.innerHTML = 'Uploading image to the GeoCalib Space \u2014 this can take a minute on a cold start\u2026';
   try{
-    const { blob, sentH } = await imageBlobForUpload();
-    const data = await geoCalibPredict(blob);
-    const raw = String(data[0] ?? '');
-    console.log('GeoCalib raw output:\n' + raw);
-    const est = parseGeoCalibText(raw, sentH);
-    if(est.f === null && est.pitch === null && est.roll === null)
-      throw new Error('Could not parse the Space\u2019s response (see console for raw text).');
-    const applied = [];
-    if(est.f !== null){ params.f = est.f * (state.imgH / sentH); applied.push(`f ${params.f.toFixed(1)} px (hfov ${(2*Math.atan(state.imgW/2/params.f)*R2D).toFixed(1)}\u00b0)`); }
-    if(est.k1 !== null){ params.k1 = est.k1; params.k2 = 0; applied.push(`k1 ${est.k1.toFixed(3)}`); }
-    if(est.pitch !== null){ params.pitch = est.pitch; applied.push(`pitch ${est.pitch.toFixed(1)}\u00b0`); }
-    if(est.roll !== null){ params.roll = est.roll; applied.push(`roll ${est.roll.toFixed(2)}\u00b0`); }
-    params.cx = state.imgW/2; params.cy = state.imgH/2;
-    document.getElementById('optHorizon').checked = true;
-    syncParamUI(); onParamsChanged(); refreshTable();
+    const { applied } = await geoCalibSeed();
     box.className = 'show good';
     box.innerHTML = '<div class="rms">GeoCalib seed applied</div><div>' + applied.join(' \u00b7 ') + '</div>' +
       '<div style="margin-top:4px">Check the horizon overlay against the skyline \u2014 if it tilts the wrong way, negate roll or pitch. Yaw and position still come from you or from step 5.</div>';
@@ -1341,26 +1440,22 @@ function evalSolution(obj, img, f, k1, k2){
   const ref = refinePoseLM(obj, img, mid.C, yprFromRot(mid.R), f, f*params.aspect, params.cx, params.cy, k1, k2);
   return { pose: { C: ref.C, R: rotFromYPR(ref.ypr[0], ref.ypr[1], ref.ypr[2]) }, rms: ref.rms };
 }
-document.getElementById('btnCalibrate').onclick = () => {
-  const box = document.getElementById('calibResult');
-  const fail = m => { box.className = 'show poor'; box.innerHTML = m; };
-  if(!state.img)   return fail('Load a camera image first.');
-  if(!state.origin) return fail('Set the origin first (step 2).');
-  if(state.pairs.length < 4) return fail(`Need at least 4 point pairs (have ${state.pairs.length}).`);
-  const solveF = document.getElementById('optFocal').checked;
-  const solveD = document.getElementById('optDist').checked;
-  if(solveD && state.pairs.length < 6) return fail('Solving distortion needs at least 6 pairs.');
+function solvePose({ solveFocal = false, solveDistortion = false } = {}){
+  if(!state.img)   throw new Error('load a camera image first');
+  if(!state.origin) throw new Error('the origin is not set (step 2)');
+  if(state.pairs.length < 4) throw new Error(`need at least 4 point pairs (have ${state.pairs.length})`);
+  if(solveDistortion && state.pairs.length < 6) throw new Error('solving distortion needs at least 6 pairs');
 
   const obj = state.pairs.map(pairWorld);
   const img = state.pairs.map(p => [p.u, p.v]);
-  let f = params.f, k1 = solveD ? 0 : params.k1, k2 = solveD ? 0 : params.k2;
+  let f = params.f, k1 = solveDistortion ? 0 : params.k1, k2 = solveDistortion ? 0 : params.k2;
 
-  if(solveF) f = goldenMin(x => evalSolution(obj, img, x, k1, k2).rms, state.imgW*0.25, state.imgW*5, 48);
-  if(solveD){
+  if(solveFocal) f = goldenMin(x => evalSolution(obj, img, x, k1, k2).rms, state.imgW*0.25, state.imgW*5, 48);
+  if(solveDistortion){
     for(let round=0; round<2; round++){
       k1 = goldenMin(x => evalSolution(obj, img, f, x, k2).rms, -0.5, 0.5, 40);
       k2 = goldenMin(x => evalSolution(obj, img, f, k1, x).rms, -0.5, 0.5, 40);
-      if(solveF) f = goldenMin(x => evalSolution(obj, img, x, k1, k2).rms, state.imgW*0.25, state.imgW*5, 40);
+      if(solveFocal) f = goldenMin(x => evalSolution(obj, img, x, k1, k2).rms, state.imgW*0.25, state.imgW*5, 40);
     }
   }
   const { pose, rms } = evalSolution(obj, img, f, k1, k2);
@@ -1371,18 +1466,75 @@ document.getElementById('btnCalibrate').onclick = () => {
   Object.assign(params, { f, k1, k2, yaw, pitch, roll, lat, lon, height: pose.C[2] });
   syncParamUI(); onParamsChanged(); refreshTable();
 
-  const method = (state.cvReady ? 'OpenCV.js solvePnP' : 'JS homography (OpenCV not loaded)');
+  return {
+    rms, f, k1, k2, yaw, pitch, roll, lat, lon, height: pose.C[2],
+    method: state.cvReady ? 'OpenCV.js solvePnP' : 'JS homography (OpenCV not loaded)',
+    per_pair_errors_px: state.pairs.map(p => p.err !== undefined ? +p.err.toFixed(2) : null),
+  };
+}
+document.getElementById('btnCalibrate').onclick = () => {
+  const box = document.getElementById('calibResult');
+  const fail = m => { box.className = 'show poor'; box.innerHTML = m; };
+  let sol;
+  try{
+    sol = solvePose({
+      solveFocal: document.getElementById('optFocal').checked,
+      solveDistortion: document.getElementById('optDist').checked,
+    });
+  }catch(err){
+    return fail(err.message.charAt(0).toUpperCase() + err.message.slice(1) + '.');
+  }
+  const { rms, f, yaw, pitch, roll, lat, lon, height, method } = sol;
   const good = rms < 10;
   box.className = 'show ' + (good ? 'good' : 'poor');
   box.innerHTML =
     `<div class="rms">RMS ${rms.toFixed(2)} px</div>` +
     `<div>method&nbsp;&nbsp;${method}</div>` +
     `<div>f ${f.toFixed(1)} px &middot; hfov ${(2*Math.atan(state.imgW/2/f)*R2D).toFixed(1)}&deg;</div>` +
-    `<div>cam ${lat.toFixed(6)}, ${lon.toFixed(6)} @ ${pose.C[2].toFixed(2)} m</div>` +
+    `<div>cam ${lat.toFixed(6)}, ${lon.toFixed(6)} @ ${height.toFixed(2)} m</div>` +
     `<div>yaw ${yaw.toFixed(1)}&deg; pitch ${pitch.toFixed(1)}&deg; roll ${roll.toFixed(2)}&deg;</div>` +
     (good ? '' : '<div style="margin-top:4px">High error &mdash; check pairs for a mismatched click, spread points wider, or set per-point z heights.</div>');
   setMsg('Calibration applied to the parameter panel.');
 };
+
+/* =====================================================================
+   CELESTIAL REFERENCES  (sun / moon as orientation constraints)
+   A body sighting at a known UTC time gives an azimuth/elevation from the
+   camera; representing it as a synthetic point ~10 km along that direction
+   (with matching z) makes it an ordinary pair the LM refiner handles.
+   ===================================================================== */
+function celestialPosition(body, timestampUtc){
+  const lat = params.lat ?? state.origin?.lat, lon = params.lon ?? state.origin?.lon;
+  if(lat === undefined || lat === null) throw new Error('place the camera or origin first');
+  if(typeof SunCalc === 'undefined') throw new Error('SunCalc library failed to load');
+  const d = new Date(timestampUtc);
+  if(isNaN(d.getTime())) throw new Error('invalid timestamp: ' + timestampUtc);
+  const p = body === 'moon' ? SunCalc.getMoonPosition(d, lat, lon) : SunCalc.getPosition(d, lat, lon);
+  /* SunCalc azimuth is measured from south, positive westward; convert to
+     compass bearing (from north, clockwise) */
+  const azimuth = ((p.azimuth * R2D) + 180) % 360;
+  return { body, azimuth_deg: +azimuth.toFixed(3), elevation_deg: +(p.altitude * R2D).toFixed(3) };
+}
+function addCelestialPair(body, timestampUtc, u, v){
+  if(!state.origin) throw new Error('set the origin first');
+  const cp = celestialPosition(body, timestampUtc);
+  if(cp.elevation_deg < -1) throw new Error(`${body} is below the horizon at that time (elevation ${cp.elevation_deg}°)`);
+  const camLat = params.lat ?? state.origin.lat, camLon = params.lon ?? state.origin.lon;
+  const [ce, cn] = llToENU(camLat, camLon, state.origin);
+  const D = 10000;   // far enough that camera-position error is negligible
+  const az = cp.azimuth_deg * D2R, el = cp.elevation_deg * D2R;
+  const e = ce + D * Math.sin(az) * Math.cos(el);
+  const n = cn + D * Math.cos(az) * Math.cos(el);
+  const z = (params.height || 0) + D * Math.sin(el);
+  const [lat, lon] = enuToLL(e, n, state.origin);
+  addPair(u, v, lat, lon);
+  const p = state.pairs.at(-1);
+  p.z = z;
+  p.celestial = body;
+  p.label = `${body} @ ${timestampUtc}`;
+  updateResiduals(); refreshTable(); drawImage();
+  return { ...cp, pair_index: state.pairs.length - 1 };
+}
 
 /* =====================================================================
    OSM CONTEXT  (Overpass API: building footprints + landmark nodes)
@@ -1447,6 +1599,19 @@ document.getElementById('btnFetchOSM').onclick = async () => {
   const r = +radN.value;
   btn.disabled = true; btn.textContent = 'Fetching\u2026';
   try{
+    await fetchOSM(r);
+    setMsg(`OSM: ${state.footprints.length} buildings, ${state.roads.length} roads, ${state.landmarks.length} landmarks. Pair clicks now snap to them.`);
+    drawImage();
+  }catch(err){
+    setMsg('Overpass fetch failed: ' + err.message + ' \u2014 try again in a moment (public server rate-limits).');
+  }finally{
+    btn.disabled = false; btn.textContent = 'Fetch buildings + roads + landmarks';
+  }
+};
+async function fetchOSM(r){
+  const lat = params.lat ?? state.origin?.lat, lon = params.lon ?? state.origin?.lon;
+  if(lat === undefined || lat === null) throw new Error('place the camera or origin first');
+  {
     /* bbox covering ±radius around the camera: [bbox:south,west,north,east] */
     const dLat = r / 111320, dLon = r / (111320 * Math.cos(lat * D2R));
     const bbox = [lat - dLat, lon - dLon, lat + dLat, lon + dLon]
@@ -1502,14 +1667,13 @@ document.getElementById('btnFetchOSM').onclick = async () => {
     document.getElementById('fpCount').textContent = state.footprints.length;
     document.getElementById('roadCount').textContent = state.roads.length;
     document.getElementById('lmCount').textContent = state.landmarks.length;
-    setMsg(`OSM: ${state.footprints.length} buildings, ${state.roads.length} roads, ${state.landmarks.length} landmarks. Pair clicks now snap to them.`);
-    drawImage();
-  }catch(err){
-    setMsg('Overpass fetch failed: ' + err.message + ' \u2014 try again in a moment (public server rate-limits).');
-  }finally{
-    btn.disabled = false; btn.textContent = 'Fetch buildings + roads + landmarks';
   }
-};
+  return {
+    buildings: state.footprints.length,
+    roads: state.roads.length,
+    landmarks: state.landmarks.length,
+  };
+}
 function clearOSM(){
   fpLayer.clearLayers();
   roadLayer.clearLayers();
@@ -1549,6 +1713,61 @@ function snapLatLng(latlng){
   for(const lm of state.landmarks) consider(lm.lat, lm.lon, lm.label.replace(/_/g,' '));
   for(const fp of state.footprints) for(const v of fp.ring) consider(v[0], v[1], 'building corner');
   return best;
+}
+
+/* =====================================================================
+   PER-IMAGE AUTOSAVE  (progress keyed by an image fingerprint, so
+   reloading the same frame restores origin, params, and pairs)
+   ===================================================================== */
+var autosaveKey = null, autosaveTimer = null, restoringProgress = false;
+function computeImageKey(){
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 64;
+  c.getContext('2d').drawImage(state.img, 0, 0, 64, 64);
+  const s = c.toDataURL('image/png');
+  let h = 5381;
+  for(let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return `ground-camera-calibrator.autosave.${state.imgW}x${state.imgH}.${h.toString(36)}`;
+}
+function snapshotProgress(){
+  return {
+    savedAt: new Date().toISOString(),
+    params: { ...params },
+    origin: state.origin,
+    datum: state.datum,
+    osmRadius: +radN.value,
+    pairs: state.pairs.map(p => ({ u: p.u, v: p.v, lat: p.lat, lon: p.lon, z: p.z, label: p.label, celestial: p.celestial })),
+  };
+}
+function scheduleAutosave(){
+  if(!autosaveKey || restoringProgress) return;
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(() => {
+    try{ localStorage.setItem(autosaveKey, JSON.stringify(snapshotProgress())); }
+    catch(e){ console.warn('autosave failed:', e); }
+  }, 800);
+}
+function restoreProgress(snap){
+  restoringProgress = true;
+  try{
+    state.pairs.forEach(p => map.removeLayer(p.marker));
+    state.pairs = []; state.selPair = -1;
+    if(snap.origin) setOrigin(snap.origin.lat, snap.origin.lon);
+    Object.assign(params, snap.params || {});
+    if(isFinite(snap.datum)){ state.datum = snap.datum; datumInput.value = snap.datum.toFixed(1); }
+    if(snap.osmRadius){ radN.value = snap.osmRadius; radR.value = snap.osmRadius; }
+    for(const p of snap.pairs || []){
+      addPair(p.u, p.v, p.lat, p.lon);
+      const q = state.pairs.at(-1);
+      q.z = p.z || 0;
+      if(p.label){ q.label = p.label; q.marker.bindTooltip(p.label); }
+      if(p.celestial) q.celestial = p.celestial;
+    }
+    syncParamUI(); onParamsChanged(); refreshTable();
+    if(snap.origin) map.setView([snap.origin.lat, snap.origin.lon], 17);
+  }finally{
+    restoringProgress = false;
+  }
 }
 
 /* =====================================================================
@@ -1596,6 +1815,7 @@ document.getElementById('importFile').onchange = e => {
           state.img = im; state.imgW = im.naturalWidth; state.imgH = im.naturalHeight;
           document.getElementById('dropHint').style.display = 'none';
           document.getElementById('imgSize').textContent = `${im.naturalWidth} × ${im.naturalHeight}`;
+          autosaveKey = computeImageKey();
           fitImage(); restorePairs(); syncParamUI(); onParamsChanged(); refreshTable();
         };
         im.src = proj.image;
@@ -1609,10 +1829,630 @@ document.getElementById('importFile').onchange = e => {
 };
 
 /* =====================================================================
+   AI LANDMARKS  (VLM via HF Inference Providers -> SAM3 Space -> Wikipedia)
+   ===================================================================== */
+const SAM3_URL = 'https://prithivmlmods-sam3-demo.hf.space';
+const VLM_KEY = 'ground-camera-calibrator.vlmModel';
+const vlmModelInput = document.getElementById('vlmModel');
+vlmModelInput.value = localStorage.getItem(VLM_KEY) || vlmModelInput.value;
+vlmModelInput.onchange = () => localStorage.setItem(VLM_KEY, vlmModelInput.value.trim());
+
+const escHtml = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* downscaled copy of the loaded frame; scale maps its px back to full-res px */
+function frameForAI(maxW = 1024){
+  return new Promise(resolve => {
+    const s = Math.min(1, maxW / state.imgW);
+    const c = document.createElement('canvas');
+    c.width = Math.round(state.imgW * s);
+    c.height = Math.round(state.imgH * s);
+    c.getContext('2d').drawImage(state.img, 0, 0, c.width, c.height);
+    const dataUrl = c.toDataURL('image/jpeg', 0.85);
+    c.toBlob(blob => resolve({ blob, dataUrl, scale: 1/s }), 'image/jpeg', 0.85);
+  });
+}
+
+/* extract the final payload from a gradio /call SSE result stream */
+function parseGradioSSE(text){
+  let event = null;
+  for(const line of text.split('\n')){
+    if(line.startsWith('event:')) event = line.slice(6).trim();
+    else if(line.startsWith('data:') && (event === 'complete' || event === 'error')){
+      const payload = JSON.parse(line.slice(5));
+      if(event === 'error') throw new Error('Space reported an error: ' + JSON.stringify(payload));
+      return payload;
+    }
+  }
+  throw new Error('Space stream ended without a result (it may be sleeping — retry in a minute).');
+}
+
+async function vlmChat(content){
+  if(!hfToken()) throw new Error('save an HF token in Settings first');
+  const res = await fetch('https://router.huggingface.co/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + hfToken() },
+    body: JSON.stringify({
+      model: vlmModelInput.value.trim(),
+      messages: [{ role: 'user', content }],
+      max_tokens: 1024,
+      temperature: 0.2,
+    }),
+  });
+  if(!res.ok) throw new Error(`VLM HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  return (await res.json()).choices[0].message.content;
+}
+
+document.getElementById('btnDetectLm').onclick = async () => {
+  if(!state.img) return setMsg('Load a camera image first.');
+  const btn = document.getElementById('btnDetectLm');
+  btn.disabled = true; btn.textContent = 'Identifying…';
+  try{
+    const { dataUrl } = await frameForAI();
+    const raw = await vlmChat([
+      { type: 'text', text:
+        'You are helping geo-calibrate a fixed outdoor camera. Identify up to 8 distinct, ' +
+        'permanently fixed, visually identifiable landmarks in this frame: named buildings, ' +
+        'towers, bridges, monuments, large signs, distinctive structures. Prefer things ' +
+        'likely to appear on a map or Wikipedia. Reply with ONLY a JSON array, no prose: ' +
+        '[{"name": string, "seg_query": string (2-4 word noun phrase locating it for a ' +
+        'segmentation model), "description": string (one short clause)}]' },
+      { type: 'image_url', image_url: { url: dataUrl } },
+    ]);
+    const m = raw.match(/\[[\s\S]*\]/);
+    if(!m) throw new Error('VLM did not return JSON: ' + raw.slice(0, 120));
+    const items = JSON.parse(m[0]);
+    renderAiList(items);
+    setMsg(`VLM identified ${items.length} landmark(s). Segment them for exact pixels, Info for Wikipedia.`);
+  }catch(err){
+    setMsg('Landmark detection failed: ' + err.message);
+  }finally{
+    btn.disabled = false; btn.textContent = 'Identify landmarks';
+  }
+};
+
+function renderAiList(items){
+  const box = document.getElementById('aiLmList');
+  box.innerHTML = '';
+  state.aiMarks = [];
+  for(const it of items){
+    const row = document.createElement('div');
+    row.className = 'ailm';
+    row.innerHTML = `<b>${escHtml(it.name)}</b>` +
+      `<div class="ailm-desc">${escHtml(it.description || '')}</div>` +
+      `<div class="btnrow"><button class="act">Segment</button><button class="act">Info</button></div>` +
+      `<div class="ailm-out"></div>`;
+    const [bSeg, bInfo] = row.querySelectorAll('button');
+    const out = row.querySelector('.ailm-out');
+    bSeg.onclick = () => segmentLandmark(it, out, bSeg);
+    bInfo.onclick = () => lookupLandmark(it, out, bInfo);
+    box.appendChild(row);
+  }
+  drawImage();
+}
+document.getElementById('btnClearAiLm').onclick = () => {
+  state.aiMarks = [];
+  document.getElementById('aiLmList').innerHTML = '';
+  drawImage();
+};
+
+/* load a SAM3 mask image: centroid of its non-empty pixels + a magenta-tinted
+   translucent overlay canvas for drawing on the camera image */
+function loadMask(url){
+  return new Promise((resolve, reject) => {
+    const im = new Image();
+    im.crossOrigin = 'anonymous';
+    im.onload = () => {
+      const w = im.naturalWidth, h = im.naturalHeight;
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const g = c.getContext('2d');
+      g.drawImage(im, 0, 0);
+      const src = g.getImageData(0, 0, w, h);
+      const d = src.data;
+      const tint = g.createImageData(w, h);
+      const t = tint.data;
+      let sx = 0, sy = 0, n = 0;
+      for(let y = 0; y < h; y++) for(let x = 0; x < w; x++){
+        const i = (y*w + x) * 4;
+        if(d[i+3] > 127 && (d[i] + d[i+1] + d[i+2]) > 30){
+          sx += x; sy += y; n++;
+          t[i] = 214; t[i+1] = 51; t[i+2] = 108; t[i+3] = 110;   // translucent #d6336c
+        }
+      }
+      if(!n) return reject(new Error('empty mask'));
+      g.putImageData(tint, 0, 0);
+      resolve({ cx: sx/n, cy: sy/n, canvas: c });
+    };
+    im.onerror = () => reject(new Error('mask image load failed'));
+    im.src = url;
+  });
+}
+
+/* text query -> SAM3 Space -> {u, v, instances} in full-res pixels; stores the
+   mask + labeled centroid in state.aiMarks so it renders on the camera image */
+async function sam3Segment(query){
+  if(!state.img) throw new Error('no camera image loaded');
+  const { blob, scale } = await frameForAI();
+  const fd = new FormData();
+  fd.append('files', blob, 'frame.jpg');
+  const up = await fetch(`${SAM3_URL}/gradio_api/upload`, { method: 'POST', body: fd });
+  if(!up.ok) throw new Error('upload HTTP ' + up.status);
+  const [path] = await up.json();
+  const call = await fetch(`${SAM3_URL}/gradio_api/call/run_image_segmentation`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data: [ { path, meta: { _type: 'gradio.FileData' } }, query, 0.45 ] }),
+  });
+  if(!call.ok) throw new Error('call HTTP ' + call.status);
+  const { event_id } = await call.json();
+  const txt = await (await fetch(`${SAM3_URL}/gradio_api/call/run_image_segmentation/${event_id}`)).text();
+  const payload = parseGradioSSE(txt);
+  /* AnnotatedImage payload: {image, annotations:[{image:FileData, label}]}; tolerate tuples */
+  const ann = payload?.[0]?.annotations || [];
+  if(!ann.length) throw new Error(`SAM3 found no match for "${query}"`);
+  const maskUrl = ann[0]?.image?.url || ann[0]?.[0]?.url || ann[0]?.url;
+  if(!maskUrl) throw new Error('unexpected mask payload shape');
+  const mask = await loadMask(maskUrl);
+  const u = mask.cx * scale, v = mask.cy * scale;
+  state.aiMarks = state.aiMarks.filter(a => a.name !== query);
+  state.aiMarks.push({ name: query, u, v, mask: mask.canvas });
+  drawImage();
+  return { u: +u.toFixed(1), v: +v.toFixed(1), instances: ann.length };
+}
+
+async function segmentLandmark(it, out, btn){
+  if(!state.img) return setMsg('Load a camera image first.');
+  btn.disabled = true; btn.textContent = 'Segmenting…';
+  out.textContent = '';
+  try{
+    const query = it.seg_query || it.name;
+    const res = await sam3Segment(query);
+    const { u, v } = res;
+    /* rename the stored mark from the raw query to the landmark's name */
+    const mark = state.aiMarks.find(a => a.name === query);
+    if(mark) mark.name = it.name;
+    out.innerHTML = `pixel (${u.toFixed(0)}, ${v.toFixed(0)}), ${res.instances} instance(s) <button class="act">Use as pair</button>`;
+    out.querySelector('button').onclick = () => {
+      state.pendingPixel = [u, v];
+      setMode('pair-map');
+      setMsg(`Now click "${it.name}" on the map (snaps to OSM points).`);
+    };
+    drawImage();
+  }catch(err){
+    out.textContent = 'segment failed: ' + err.message;
+  }finally{
+    btn.disabled = false; btn.textContent = 'Segment';
+  }
+}
+
+/* landmark name -> Wikipedia search + summary */
+async function wikiLookup(name){
+  const s = await fetch('https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&origin=*&srlimit=1&srsearch=' +
+    encodeURIComponent(name)).then(r => r.json());
+  const hit = s.query?.search?.[0];
+  if(!hit) throw new Error('no Wikipedia match for "' + name + '"');
+  const sum = await fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' +
+    encodeURIComponent(hit.title)).then(r => r.json());
+  return {
+    title: sum.title,
+    extract: sum.extract || '',
+    url: sum.content_urls?.desktop?.page || null,
+    coordinates: sum.coordinates ? { lat: sum.coordinates.lat, lon: sum.coordinates.lon } : null,
+  };
+}
+
+async function lookupLandmark(it, out, btn){
+  btn.disabled = true; btn.textContent = 'Searching…';
+  try{
+    const sum = await wikiLookup(it.name);
+    const info = document.createElement('div');
+    info.innerHTML = `<a href="${sum.url || '#'}" target="_blank" rel="noopener">${escHtml(sum.title)}</a>: ` +
+      escHtml((sum.extract || 'no summary').slice(0, 280));
+    if(sum.coordinates){
+      const { lat, lon } = sum.coordinates;
+      const mark = state.aiMarks.find(a => a.name === it.name);
+      const b = document.createElement('button');
+      b.className = 'act';
+      b.textContent = (mark ? 'Add pair @ ' : 'Pan map to ') + lat.toFixed(5) + ', ' + lon.toFixed(5);
+      b.onclick = () => {
+        if(mark && state.origin){
+          addPair(mark.u, mark.v, lat, lon);
+          setMsg(`Pair added: ${it.name} @ Wikipedia coordinates.`);
+        } else if(mark){
+          setMsg('Set the origin first (section 2), then add the pair.');
+        } else {
+          map.setView([lat, lon], 18);
+        }
+      };
+      info.appendChild(document.createElement('br'));
+      info.appendChild(b);
+    }
+    out.innerHTML = '';
+    out.appendChild(info);
+  }catch(err){
+    out.textContent = 'search failed: ' + err.message;
+  }finally{
+    btn.disabled = false; btn.textContent = 'Info';
+  }
+}
+
+/* =====================================================================
+   AGENT AUTO-CALIBRATE  (Claude tool-use loop, called directly from the
+   browser — BYO key via the anthropic-dangerous-direct-browser-access CORS
+   header. Claude is the VLM: it sees the frame and the annotated render.)
+   ===================================================================== */
+const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+
+/* compact state snapshot for the agent */
+function agentGetState(){
+  return {
+    image: state.img ? { width: state.imgW, height: state.imgH } : null,
+    origin: state.origin,
+    camera: { lat: params.lat, lon: params.lon, height_m: params.height },
+    params: {
+      f_px: +params.f.toFixed(1), yaw_deg: +params.yaw.toFixed(2), pitch_deg: +params.pitch.toFixed(2),
+      roll_deg: +params.roll.toFixed(2), k1: +params.k1.toFixed(4), k2: +params.k2.toFixed(4),
+      cx: params.cx, cy: params.cy,
+    },
+    pairs: state.pairs.map((p, i) => ({
+      index: i, u: +p.u.toFixed(1), v: +p.v.toFixed(1), lat: +p.lat.toFixed(7), lon: +p.lon.toFixed(7),
+      z_m: +p.z.toFixed(1), label: p.label, celestial: p.celestial,
+      reprojection_error_px: p.err !== undefined ? +p.err.toFixed(2) : null,
+    })),
+    rms_px: state.lastRMS !== null && state.lastRMS !== undefined ? +state.lastRMS.toFixed(2) : null,
+    osm_loaded: { buildings: state.footprints.length, roads: state.roads.length, landmarks: state.landmarks.length },
+    opencv_solver: state.cvReady,
+  };
+}
+
+/* offscreen render of the frame with all overlays at current parameters —
+   what the agent "sees" when it verifies calibration */
+function renderAnnotatedFrame(maxW = 1024){
+  const s = Math.min(1, maxW / state.imgW);
+  const c = document.createElement('canvas');
+  c.width = Math.round(state.imgW * s);
+  c.height = Math.round(state.imgH * s);
+  const g = c.getContext('2d');
+  g.drawImage(state.img, 0, 0, c.width, c.height);
+  const posed = camPose() && state.origin;
+  const line = (a, b, style, w) => {
+    if(!a || !b) return;
+    g.strokeStyle = style; g.lineWidth = w;
+    g.beginPath(); g.moveTo(a[0]*s, a[1]*s); g.lineTo(b[0]*s, b[1]*s); g.stroke();
+  };
+  if(posed){
+    for(const rd of state.roads){
+      let prev = null;
+      for(const ll of rd.pts){
+        const [e, n] = llToENU(ll[0], ll[1], state.origin);
+        const q = projectWorld([e, n, 0]);
+        if(q && prev) line(prev, q, 'rgba(232,89,12,.9)', 2);
+        prev = q;
+      }
+    }
+    for(const fp of state.footprints){
+      const base = fp.ring.map(ll => {
+        const [e, n] = llToENU(ll[0], ll[1], state.origin);
+        return projectWorld([e, n, 0]);
+      });
+      for(let i = 0; i < base.length; i++) line(base[i], base[(i+1)%base.length], 'rgba(11,114,133,.95)', 1.6);
+    }
+    for(const lm of state.landmarks){
+      const [e, n] = llToENU(lm.lat, lm.lon, state.origin);
+      const q = projectWorld([e, n, 0]);
+      if(!q) continue;
+      g.fillStyle = lmColor(lm.label);
+      g.fillRect(q[0]*s - 2.5, q[1]*s - 2.5, 5, 5);
+    }
+  }
+  for(const m of state.aiMarks){
+    if(m.mask){
+      g.save(); g.globalAlpha = .85;
+      g.drawImage(m.mask, 0, 0, c.width, c.height); /* mask is frame-aligned */
+      g.restore();
+    }
+    g.strokeStyle = '#d6336c'; g.lineWidth = 2;
+    g.beginPath(); g.arc(m.u*s, m.v*s, 6, 0, Math.PI*2); g.stroke();
+    g.font = '600 11px monospace';
+    g.strokeStyle = 'rgba(255,255,255,.85)'; g.lineWidth = 3;
+    g.strokeText(m.name, m.u*s + 8, m.v*s - 6);
+    g.fillStyle = '#d6336c';
+    g.fillText(m.name, m.u*s + 8, m.v*s - 6);
+  }
+  state.pairs.forEach((p, i) => {
+    const x = p.u*s, y = p.v*s;
+    g.strokeStyle = pairColor(i); g.lineWidth = 2;
+    g.beginPath(); g.moveTo(x-8, y); g.lineTo(x+8, y); g.moveTo(x, y-8); g.lineTo(x, y+8); g.stroke();
+    g.font = '600 11px monospace';
+    g.fillStyle = pairColor(i);
+    g.fillText(String(i+1), x + 5, y - 5);
+    if(posed){
+      const q = projectWorld(pairWorld(p));
+      if(q){
+        g.fillStyle = pairColor(i);
+        g.beginPath(); g.arc(q[0]*s, q[1]*s, 3.5, 0, Math.PI*2); g.fill();
+        g.strokeStyle = '#fff'; g.lineWidth = 1;
+        g.beginPath(); g.arc(q[0]*s, q[1]*s, 3.5, 0, Math.PI*2); g.stroke();
+      }
+    }
+  });
+  return c.toDataURL('image/jpeg', 0.85);
+}
+
+const AGENT_TOOLS = [
+  { type: 'web_search_20260209', name: 'web_search', max_uses: 8 },
+  { name: 'get_state',
+    description: 'Current calibration state: image size, origin, camera GPS, parameters, all pairs with reprojection errors, overall RMS, and loaded OSM data counts.',
+    input_schema: { type: 'object', properties: {}, additionalProperties: false } },
+  { name: 'look_at_camera',
+    description: 'Returns a render of the camera frame with every overlay drawn at the CURRENT parameters: projected OSM building outlines (teal), roads (orange), landmark dots, SAM3 masks/marks (magenta), and pairs (numbered crosses; the small dot of the same color is where that pair currently reprojects — cross far from dot = bad fit). Call this to identify landmarks in the scene and to visually verify calibration after solving.',
+    input_schema: { type: 'object', properties: {}, additionalProperties: false } },
+  { name: 'fetch_osm',
+    description: 'Fetch OpenStreetMap context around the camera: building footprints, roads, and point landmarks (poles, signals, trees, signs...). Returns counts plus exact coordinates of landmarks and building corners for pairing.',
+    input_schema: { type: 'object', properties: {
+      radius_m: { type: 'number', description: 'Fetch radius in meters (50-600)', minimum: 50, maximum: 600 },
+    }, required: ['radius_m'], additionalProperties: false } },
+  { name: 'segment_object',
+    description: 'SAM3 text-prompted segmentation on the camera frame. Give a short noun phrase ("red brick clock tower", "leftmost street lamp"); returns the exact full-resolution pixel centroid of the best match and draws its mask on the image. Note: the centroid is the mask center of mass — for a building prefer pairing a corner or its base.',
+    input_schema: { type: 'object', properties: {
+      query: { type: 'string', description: '2-5 word noun phrase locating one object' },
+    }, required: ['query'], additionalProperties: false } },
+  { name: 'wikipedia_lookup',
+    description: 'Look up a named landmark on Wikipedia. Returns title, summary, URL, and — for geographic subjects — exact coordinates usable as the world side of a pair.',
+    input_schema: { type: 'object', properties: {
+      name: { type: 'string' },
+    }, required: ['name'], additionalProperties: false } },
+  { name: 'geocalib_seed',
+    description: 'Run the GeoCalib neural network on the frame to estimate focal length, k1 distortion, pitch, and roll from image cues alone; applies them to the parameters. Good first step. Does NOT estimate yaw or position. May take a minute on a cold start.',
+    input_schema: { type: 'object', properties: {}, additionalProperties: false } },
+  { name: 'add_pair',
+    description: 'Add an image<->world correspondence: pixel (u,v) in the full-resolution frame paired with a world coordinate (lat, lon, optional height above local ground in meters).',
+    input_schema: { type: 'object', properties: {
+      u: { type: 'number' }, v: { type: 'number' },
+      lat: { type: 'number' }, lon: { type: 'number' },
+      z_m: { type: 'number', description: 'Height above local ground of the world point (e.g. top of a 20 m tower = 20). Default 0 (ground).' },
+      label: { type: 'string', description: 'Short name of the feature' },
+    }, required: ['u', 'v', 'lat', 'lon'], additionalProperties: false } },
+  { name: 'remove_pair',
+    description: 'Delete a pair by its index (from get_state / solve_pose). Use on outliers.',
+    input_schema: { type: 'object', properties: {
+      index: { type: 'integer' },
+    }, required: ['index'], additionalProperties: false } },
+  { name: 'set_param',
+    description: 'Directly set one camera parameter (e.g. a rough yaw guess before solving, or a known mounting height).',
+    input_schema: { type: 'object', properties: {
+      key: { type: 'string', enum: ['yaw', 'pitch', 'roll', 'f', 'height', 'k1', 'k2'] },
+      value: { type: 'number' },
+    }, required: ['key', 'value'], additionalProperties: false } },
+  { name: 'solve_pose',
+    description: 'Solve the full camera pose from the current pairs (needs 4+; 6+ for distortion). Writes the solution to the parameters and returns RMS plus per-pair reprojection errors.',
+    input_schema: { type: 'object', properties: {
+      solve_focal: { type: 'boolean', description: 'Also optimize focal length (recommended unless geocalib_seed gave a confident f)' },
+      solve_distortion: { type: 'boolean', description: 'Also optimize k1/k2 (needs 6+ pairs)' },
+    }, additionalProperties: false } },
+  { name: 'celestial_position',
+    description: 'Azimuth/elevation of the sun or moon as seen from the camera at a given UTC time. Use to sanity-check before add_celestial_pair.',
+    input_schema: { type: 'object', properties: {
+      body: { type: 'string', enum: ['sun', 'moon'] },
+      timestamp_utc: { type: 'string', description: 'ISO 8601 UTC time of the frame, e.g. 2026-07-03T18:40:00Z' },
+    }, required: ['body', 'timestamp_utc'], additionalProperties: false } },
+  { name: 'add_celestial_pair',
+    description: 'If the sun or moon is visible in the frame AND the capture time is known (user notes, or a timestamp burned into the frame), pair its pixel position with its computed sky direction. One celestial pair strongly constrains yaw/pitch/roll — very valuable when few ground landmarks exist.',
+    input_schema: { type: 'object', properties: {
+      body: { type: 'string', enum: ['sun', 'moon'] },
+      timestamp_utc: { type: 'string', description: 'ISO 8601 UTC capture time' },
+      u: { type: 'number', description: 'Pixel x of the body center (full-res frame)' },
+      v: { type: 'number', description: 'Pixel y of the body center' },
+    }, required: ['body', 'timestamp_utc', 'u', 'v'], additionalProperties: false } },
+];
+
+async function executeAgentTool(name, input){
+  switch(name){
+    case 'get_state':
+      return agentGetState();
+    case 'look_at_camera': {
+      if(!state.img) throw new Error('no camera image loaded');
+      const dataUrl = renderAnnotatedFrame();
+      const rms = state.lastRMS;
+      return [
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: dataUrl.split(',')[1] } },
+        { type: 'text', text: `Annotated render at current parameters. RMS: ${rms != null ? rms.toFixed(2) + ' px' : 'n/a (not solved yet)'}. Pixel coordinates you give in other tools must be in the full ${state.imgW}x${state.imgH} frame (this render is scaled by ${(Math.min(1, 1024/state.imgW)).toFixed(4)}).` },
+      ];
+    }
+    case 'fetch_osm': {
+      const res = await fetchOSM(Math.min(600, Math.max(50, input.radius_m)));
+      const landmarks = state.landmarks.slice(0, 150).map(l => ({ type: l.label, lat: +l.lat.toFixed(7), lon: +l.lon.toFixed(7) }));
+      const buildings = state.footprints.slice(0, 40).map(fp => ({
+        height_m: fp.height,
+        corners: fp.ring.slice(0, 12).map(c => [+c[0].toFixed(7), +c[1].toFixed(7)]),
+      }));
+      return { counts: res, landmarks, buildings,
+        note: 'corner/landmark coordinates are exact — prefer them as the world side of pairs' };
+    }
+    case 'segment_object':
+      return await sam3Segment(input.query);
+    case 'wikipedia_lookup':
+      return await wikiLookup(input.name);
+    case 'geocalib_seed':
+      return await geoCalibSeed();
+    case 'add_pair': {
+      if(!state.origin) throw new Error('origin is not set');
+      addPair(input.u, input.v, input.lat, input.lon);
+      const p = state.pairs.at(-1);
+      if(input.z_m) p.z = input.z_m;
+      if(input.label){ p.label = input.label; p.marker.bindTooltip(input.label); }
+      updateResiduals(); refreshTable(); drawImage();
+      return { pair_index: state.pairs.length - 1, pair_count: state.pairs.length };
+    }
+    case 'remove_pair': {
+      if(!state.pairs[input.index]) throw new Error('no pair at index ' + input.index);
+      removePair(input.index);
+      return { pair_count: state.pairs.length };
+    }
+    case 'set_param': {
+      paramInputs[input.key].set(input.value);
+      onParamsChanged();
+      return { [input.key]: input.value };
+    }
+    case 'solve_pose':
+      return solvePose({ solveFocal: !!input.solve_focal, solveDistortion: !!input.solve_distortion });
+    case 'celestial_position':
+      return celestialPosition(input.body, input.timestamp_utc);
+    case 'add_celestial_pair':
+      return addCelestialPair(input.body, input.timestamp_utc, input.u, input.v);
+    default:
+      throw new Error('unknown tool: ' + name);
+  }
+}
+
+const AGENT_SYSTEM = `You are operating a ground-camera geo-calibration tool. Goal: solve the camera's pose (position, yaw/pitch/roll, focal length, distortion) by pairing pixels in the camera frame with world coordinates, then minimizing reprojection error.
+
+What you know about the math: 4+ well-spread pairs are needed to solve (6+ to also fit distortion); pairs clustered in one image region or all on one line solve poorly. World coordinates must be accurate to a few meters — OSM landmark nodes and building corners are exact; Wikipedia coordinates refer to the whole subject (fine for a distant tower, too coarse for a nearby building where you should use its OSM corner instead). For tall structures, pair the visible BASE with z=0, or the top with z set to the structure height.
+
+Working style: seed intrinsics with geocalib_seed, look at the frame, fetch OSM context, then cross-reference what you see with OSM geometry, Wikipedia, and web search to build pairs — segment_object gives exact pixels. If the sun or moon is visible and you know the capture time (from the user's notes or a timestamp overlay burned into the frame — read it), add a celestial pair: it strongly pins orientation. After solving, ALWAYS call look_at_camera and check that projected buildings/roads hug their image features and each numbered cross sits on its same-colored reprojection dot; drop or fix outlier pairs and re-solve. A rough yaw guess via set_param before the first solve helps the optimizer when pairs are few.
+
+Success: RMS under ~5 px is good, under 10 acceptable. You are autonomous — proceed without asking; only give up early if the camera/origin position is missing and cannot be inferred from the scene plus web research. Finish with a short plain-language summary: achieved RMS, the solved yaw/pitch/roll/f/height, which references you used, and your confidence.`;
+
+async function callClaude(body, signal){
+  const res = await fetch(ANTHROPIC_URL, {
+    method: 'POST',
+    signal,
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': anthropicKey(),
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify(body),
+  });
+  if(!res.ok) throw new Error(`Claude API HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  return res.json();
+}
+
+let agentAbort = null;
+function agentLog(cls, text){
+  const box = document.getElementById('agentLog');
+  const div = document.createElement('div');
+  div.className = cls;
+  div.textContent = text;
+  box.appendChild(div);
+  box.scrollTop = box.scrollHeight;
+}
+
+document.getElementById('btnAgentStop').onclick = () => { agentAbort?.abort(); };
+document.getElementById('btnAgentRun').onclick = async () => {
+  const btn = document.getElementById('btnAgentRun');
+  const stopBtn = document.getElementById('btnAgentStop');
+  if(!state.img) return setMsg('Load a camera image first.');
+  if(!anthropicKey()) return setMsg('Save an Anthropic API key in Settings first.');
+  document.getElementById('agentLog').innerHTML = '';
+  btn.disabled = true; stopBtn.disabled = false;
+  agentAbort = new AbortController();
+  const signal = agentAbort.signal;
+  try{
+    const goal = document.getElementById('agentGoal').value.trim();
+    const { dataUrl } = await frameForAI();
+    const messages = [{
+      role: 'user',
+      content: [
+        { type: 'text', text:
+          (goal ? 'Operator notes: ' + goal + '\n\n' : '') +
+          'Calibrate this camera. Current state:\n' + JSON.stringify(agentGetState()) +
+          '\n\nThe camera frame follows (downscaled; report pixels in the full-resolution frame).' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: dataUrl.split(',')[1] } },
+      ],
+    }];
+    let containerId = null;   // code-execution container behind web_search dynamic filtering
+    for(let iter = 0; iter < 40; iter++){
+      const msg = await callClaude({
+        model: document.getElementById('agentModel').value.trim() || 'claude-opus-4-8',
+        max_tokens: 16000,
+        thinking: { type: 'adaptive' },
+        system: AGENT_SYSTEM,
+        tools: AGENT_TOOLS,
+        messages,
+        ...(containerId ? { container: containerId } : {}),
+      }, signal);
+      if(msg.container?.id) containerId = msg.container.id;
+      for(const block of msg.content || []){
+        if(block.type === 'text' && block.text.trim())
+          agentLog(msg.stop_reason === 'end_turn' ? 'al-text al-final' : 'al-text', block.text.trim());
+      }
+      if(msg.stop_reason === 'pause_turn'){
+        messages.push({ role: 'assistant', content: msg.content });
+        continue;
+      }
+      if(msg.stop_reason === 'refusal'){
+        agentLog('al-tool err', 'The model declined this request (stop_reason: refusal).');
+        break;
+      }
+      if(msg.stop_reason !== 'tool_use'){
+        setMsg('Agent finished.');
+        break;
+      }
+      messages.push({ role: 'assistant', content: msg.content });
+      const results = [];
+      for(const tu of msg.content.filter(b => b.type === 'tool_use')){
+        const argStr = JSON.stringify(tu.input);
+        try{
+          const out = await executeAgentTool(tu.name, tu.input);
+          agentLog('al-tool', `→ ${tu.name} ${argStr.length > 90 ? argStr.slice(0, 90) + '…' : argStr} ✓`);
+          results.push({
+            type: 'tool_result',
+            tool_use_id: tu.id,
+            content: Array.isArray(out) ? out : (typeof out === 'string' ? out : JSON.stringify(out)),
+          });
+        }catch(err){
+          agentLog('al-tool err', `→ ${tu.name} ✗ ${err.message}`);
+          results.push({ type: 'tool_result', tool_use_id: tu.id, content: String(err.message), is_error: true });
+        }
+        if(signal.aborted) break;
+      }
+      messages.push({ role: 'user', content: results });
+      if(signal.aborted) throw new DOMException('stopped', 'AbortError');
+    }
+  }catch(err){
+    if(err.name === 'AbortError'){ agentLog('al-tool err', '■ stopped by user'); setMsg('Agent stopped.'); }
+    else { agentLog('al-tool err', 'Agent error: ' + err.message); setMsg('Agent error: ' + err.message); }
+  }finally{
+    btn.disabled = false; stopBtn.disabled = true;
+    agentAbort = null;
+  }
+};
+
+/* =====================================================================
    SETTINGS  (HF token, kept in localStorage — never leaves the browser)
    ===================================================================== */
 const HF_TOKEN_KEY = 'ground-camera-calibrator.hfToken';
 function hfToken(){ return localStorage.getItem(HF_TOKEN_KEY) || ''; }
+const ANT_KEY_KEY = 'ground-camera-calibrator.anthropicKey';
+function anthropicKey(){ return localStorage.getItem(ANT_KEY_KEY) || ''; }
+const AGENT_MODEL_KEY = 'ground-camera-calibrator.agentModel';
+(function initAgentSettings(){
+  const input = document.getElementById('anthropicKeyInput');
+  const status = document.getElementById('antKeyStatus');
+  const show = () => {
+    const t = anthropicKey();
+    input.value = t;
+    status.textContent = t ? `saved (…${t.slice(-4)})` : 'not set';
+  };
+  document.getElementById('btnSaveAntKey').onclick = () => {
+    const t = input.value.trim();
+    if(!t) return setMsg('Key is empty — use Clear to remove the saved one.');
+    localStorage.setItem(ANT_KEY_KEY, t);
+    show();
+    setMsg('Anthropic key saved to this browser.');
+  };
+  document.getElementById('btnClearAntKey').onclick = () => {
+    localStorage.removeItem(ANT_KEY_KEY);
+    show();
+    setMsg('Anthropic key cleared.');
+  };
+  show();
+  const model = document.getElementById('agentModel');
+  model.value = localStorage.getItem(AGENT_MODEL_KEY) || model.value;
+  model.onchange = () => localStorage.setItem(AGENT_MODEL_KEY, model.value.trim());
+})();
 (function initSettings(){
   const input = document.getElementById('hfTokenInput');
   const status = document.getElementById('tokenStatus');
