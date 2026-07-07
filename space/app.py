@@ -95,7 +95,7 @@ def _coord(*candidates) -> float | None:
 
 def search(query: str):
     if not query.strip():
-        return [], gr.skip(), gr.skip()
+        return [], None
     if not _meta:
         load_index()
     scores = _embeddings @ embed_text(query)
@@ -107,13 +107,18 @@ def search(query: str):
         m = _meta[i]
         name = (m["metadata"].get("camera_name") or "camera").strip()
         results.append((m["url"], f"{name} · {_fmt_ts(m.get('ts'))} · {scores[i]:.2f}"))
-    fig, points = map_figure(scores)
-    return results, fig, points
+    return results, map_figure(scores)
 
 
-def map_points(scores: np.ndarray) -> list[dict]:
-    """One entry per camera with known coordinates, in the order they are plotted."""
-    return [
+# Points backing the current map figure, in plot order, so a select event's
+# index can be resolved back to a camera.
+_points: list[dict] = []
+
+
+def map_figure(scores: np.ndarray):
+    """Plot every camera with known coordinates, colored by similarity to the query."""
+    global _points
+    _points = [
         {
             "lat": m["lat"],
             "lon": m["lon"],
@@ -125,14 +130,9 @@ def map_points(scores: np.ndarray) -> list[dict]:
         for i, m in enumerate(_meta)
         if m["lat"] is not None and m["lon"] is not None
     ]
-
-
-def map_figure(scores: np.ndarray):
-    """Plot every camera with known coordinates, colored by similarity to the query."""
-    points = map_points(scores)
-    if not points:
-        return None, []
-    df = pd.DataFrame(points)
+    if not _points:
+        return None
+    df = pd.DataFrame(_points)
     fig = px.scatter_map(
         df,
         lat="lat",
@@ -145,17 +145,17 @@ def map_figure(scores: np.ndarray):
     )
     fig.update_traces(marker={"size": 8})
     fig.update_layout(margin={"l": 0, "r": 0, "t": 0, "b": 0})
-    return fig, points
+    return fig
 
 
-def show_camera(points: list[dict], evt: gr.SelectData):
+def on_plot_select(evt: gr.SelectData):
     """Show the snapshot for the map dot the user clicked."""
     idx = evt.index
     if isinstance(idx, (list, tuple)):  # plotly reports (trace, point) in some versions
         idx = idx[-1]
-    if not points or idx is None or not (0 <= idx < len(points)):
+    if idx is None or not (0 <= idx < len(_points)):
         return gr.skip(), gr.skip()
-    p = points[idx]
+    p = _points[idx]
     caption = f"**{p['camera']}** · {_fmt_ts(p['ts'])} · similarity {p['similarity']:.2f}"
     return p["url"], caption
 
@@ -188,23 +188,17 @@ with gr.Blocks(title="Worldscope Search") as demo:
         )
         btn = gr.Button("Search", variant="primary", scale=1)
     status = gr.Markdown()
-    points_state = gr.State([])
+    gallery = gr.Gallery(label="Results", columns=4, height=700, object_fit="cover")
     with gr.Row():
-        map_plot = gr.Plot(label="Camera map (color = similarity, click a dot to preview)", scale=2)
+        map_plot = gr.Plot(label="Detections map (color = similarity, click a dot to preview)", scale=2)
         with gr.Column(scale=1):
             selected_image = gr.Image(label="Selected camera", height=400, interactive=False)
             selected_caption = gr.Markdown("*Click a dot on the map to see its snapshot.*")
-    gallery = gr.Gallery(label="Results", columns=4, height=700, object_fit="cover")
 
-    def startup():
-        msg = load_index()
-        fig, points = map_figure(np.zeros(len(_meta), dtype=np.float32))
-        return msg, fig, points
-
-    btn.click(search, inputs=query, outputs=[gallery, map_plot, points_state])
-    query.submit(search, inputs=query, outputs=[gallery, map_plot, points_state])
-    map_plot.select(show_camera, inputs=points_state, outputs=[selected_image, selected_caption])
-    demo.load(startup, outputs=[status, map_plot, points_state])
+    btn.click(search, inputs=query, outputs=[gallery, map_plot])
+    query.submit(search, inputs=query, outputs=[gallery, map_plot])
+    map_plot.select(fn=on_plot_select, outputs=[selected_image, selected_caption])
+    demo.load(load_index, outputs=status)
 
 
 if __name__ == "__main__":
