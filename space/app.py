@@ -148,16 +148,40 @@ def map_figure(scores: np.ndarray):
     return fig
 
 
-def on_plot_select(evt: gr.SelectData):
-    """Show the snapshot for the map dot the user clicked."""
-    idx = evt.index
-    if isinstance(idx, (list, tuple)):  # plotly reports (trace, point) in some versions
-        idx = idx[-1]
-    if idx is None or not (0 <= idx < len(_points)):
+def on_point_click(idx_str: str):
+    """Show the snapshot for the map dot the user clicked (index arrives via hidden textbox)."""
+    try:
+        idx = int(idx_str)
+    except (TypeError, ValueError):
+        return gr.skip(), gr.skip()
+    if not (0 <= idx < len(_points)):
         return gr.skip(), gr.skip()
     p = _points[idx]
     caption = f"**{p['camera']}** · {_fmt_ts(p['ts'])} · similarity {p['similarity']:.2f}"
     return p["url"], caption
+
+
+# gr.Plot has no .select event on the Gradio version the Space runs, so listen for
+# plotly_click in the browser and relay the point index through a hidden textbox.
+# The plot div is replaced on every re-render, so keep re-attaching via setInterval.
+_PLOT_CLICK_JS = """
+() => {
+    const attach = () => {
+        const plot = document.querySelector('#map_plot .js-plotly-plot');
+        if (!plot || plot.dataset.clickBound) return;
+        plot.dataset.clickBound = '1';
+        plot.on('plotly_click', (data) => {
+            const idx = data.points?.[0]?.pointIndex;
+            if (idx === undefined) return;
+            const box = document.querySelector('#selected_point textarea');
+            if (!box) return;
+            box.value = String(idx);
+            box.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+    };
+    setInterval(attach, 500);
+}
+"""
 
 
 def _fmt_ts(ts) -> str:
@@ -190,15 +214,21 @@ with gr.Blocks(title="Worldscope Search") as demo:
     status = gr.Markdown()
     gallery = gr.Gallery(label="Results", columns=4, height=700, object_fit="cover")
     with gr.Row():
-        map_plot = gr.Plot(label="Detections map (color = similarity, click a dot to preview)", scale=2)
+        map_plot = gr.Plot(
+            label="Detections map (color = similarity, click a dot to preview)",
+            scale=2,
+            elem_id="map_plot",
+        )
         with gr.Column(scale=1):
             selected_image = gr.Image(label="Selected camera", height=400, interactive=False)
             selected_caption = gr.Markdown("*Click a dot on the map to see its snapshot.*")
+    selected_idx = gr.Textbox(visible=False, elem_id="selected_point")
 
     btn.click(search, inputs=query, outputs=[gallery, map_plot])
     query.submit(search, inputs=query, outputs=[gallery, map_plot])
-    map_plot.select(fn=on_plot_select, outputs=[selected_image, selected_caption])
+    selected_idx.input(on_point_click, inputs=selected_idx, outputs=[selected_image, selected_caption])
     demo.load(load_index, outputs=status)
+    demo.load(fn=None, js=_PLOT_CLICK_JS)
 
 
 if __name__ == "__main__":
