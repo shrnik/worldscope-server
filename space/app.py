@@ -95,7 +95,7 @@ def _coord(*candidates) -> float | None:
 
 def search(query: str):
     if not query.strip():
-        return [], None
+        return [], gr.skip(), gr.skip()
     if not _meta:
         load_index()
     scores = _embeddings @ embed_text(query)
@@ -107,24 +107,32 @@ def search(query: str):
         m = _meta[i]
         name = (m["metadata"].get("camera_name") or "camera").strip()
         results.append((m["url"], f"{name} · {_fmt_ts(m.get('ts'))} · {scores[i]:.2f}"))
-    return results, map_figure(scores)
+    fig, points = map_figure(scores)
+    return results, fig, points
 
 
-def map_figure(scores: np.ndarray):
-    """Plot every camera with known coordinates, colored by similarity to the query."""
-    rows = [
+def map_points(scores: np.ndarray) -> list[dict]:
+    """One entry per camera with known coordinates, in the order they are plotted."""
+    return [
         {
             "lat": m["lat"],
             "lon": m["lon"],
             "similarity": float(scores[i]),
             "camera": (m["metadata"].get("camera_name") or "camera").strip(),
+            "url": m["url"],
+            "ts": m.get("ts"),
         }
         for i, m in enumerate(_meta)
         if m["lat"] is not None and m["lon"] is not None
     ]
-    if not rows:
-        return None
-    df = pd.DataFrame(rows)
+
+
+def map_figure(scores: np.ndarray):
+    """Plot every camera with known coordinates, colored by similarity to the query."""
+    points = map_points(scores)
+    if not points:
+        return None, []
+    df = pd.DataFrame(points)
     fig = px.scatter_map(
         df,
         lat="lat",
@@ -137,7 +145,19 @@ def map_figure(scores: np.ndarray):
     )
     fig.update_traces(marker={"size": 8})
     fig.update_layout(margin={"l": 0, "r": 0, "t": 0, "b": 0})
-    return fig
+    return fig, points
+
+
+def show_camera(points: list[dict], evt: gr.SelectData):
+    """Show the snapshot for the map dot the user clicked."""
+    idx = evt.index
+    if isinstance(idx, (list, tuple)):  # plotly reports (trace, point) in some versions
+        idx = idx[-1]
+    if not points or idx is None or not (0 <= idx < len(points)):
+        return gr.skip(), gr.skip()
+    p = points[idx]
+    caption = f"**{p['camera']}** · {_fmt_ts(p['ts'])} · similarity {p['similarity']:.2f}"
+    return p["url"], caption
 
 
 def _fmt_ts(ts) -> str:
@@ -168,12 +188,23 @@ with gr.Blocks(title="Worldscope Search") as demo:
         )
         btn = gr.Button("Search", variant="primary", scale=1)
     status = gr.Markdown()
+    points_state = gr.State([])
+    with gr.Row():
+        map_plot = gr.Plot(label="Camera map (color = similarity, click a dot to preview)", scale=2)
+        with gr.Column(scale=1):
+            selected_image = gr.Image(label="Selected camera", height=400, interactive=False)
+            selected_caption = gr.Markdown("*Click a dot on the map to see its snapshot.*")
     gallery = gr.Gallery(label="Results", columns=4, height=700, object_fit="cover")
-    map_plot = gr.Plot(label="Detections map (color = similarity)")
 
-    btn.click(search, inputs=query, outputs=[gallery, map_plot])
-    query.submit(search, inputs=query, outputs=[gallery, map_plot])
-    demo.load(load_index, outputs=status)
+    def startup():
+        msg = load_index()
+        fig, points = map_figure(np.zeros(len(_meta), dtype=np.float32))
+        return msg, fig, points
+
+    btn.click(search, inputs=query, outputs=[gallery, map_plot, points_state])
+    query.submit(search, inputs=query, outputs=[gallery, map_plot, points_state])
+    map_plot.select(show_camera, inputs=points_state, outputs=[selected_image, selected_caption])
+    demo.load(startup, outputs=[status, map_plot, points_state])
 
 
 if __name__ == "__main__":
