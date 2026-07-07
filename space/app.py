@@ -73,8 +73,8 @@ def load_index() -> str:
         md = md or {}
         # Typed lat/lon columns exist in newer parquets; fall back to the
         # metadata JSON for files written before they were added.
-        lat = _coord(row.get("lat"), md.get("lat"))
-        lon = _coord(row.get("lon"), md.get("lon"))
+        lat = _coord(row.get("lat"), md.get("lat"), bound=90)
+        lon = _coord(row.get("lon"), md.get("lon"), bound=180)
         meta.append(
             {"url": row.get("url"), "metadata": md, "ts": row.get("ts"), "lat": lat, "lon": lon}
         )
@@ -82,13 +82,13 @@ def load_index() -> str:
     return f"Loaded {len(_meta)} images"
 
 
-def _coord(*candidates) -> float | None:
+def _coord(*candidates, bound: float) -> float | None:
     for value in candidates:
         try:
             value = float(value)
         except (TypeError, ValueError):
             continue
-        if not np.isnan(value):
+        if not np.isnan(value) and abs(value) <= bound:
             return value
     return None
 
