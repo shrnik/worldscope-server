@@ -3,7 +3,7 @@ name: Deploy Space
 # Push the Gradio search frontend to the HF Space when space/ changes, or on demand.
 on:
   push:
-    branches: [main]
+    branches: [main, fix/remove-queue]
     paths:
       - "space/**"
       - ".github/workflows/deploy-space.yml"
