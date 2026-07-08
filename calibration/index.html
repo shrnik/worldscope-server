@@ -305,6 +305,7 @@ footer .grow{flex:1}
         <button class="act" id="btnClearAiLm">Clear</button>
       </div>
       <div id="aiLmList"></div>
+      <div id="aiMarkChips" class="btnrow" style="flex-wrap:wrap"></div>
     </div>
   </details>
 
@@ -684,27 +685,27 @@ function fitImage(){
   viewT.tx = (r.width  - state.imgW*viewT.s)/2;
   viewT.ty = (r.height - state.imgH*viewT.s)/2;
 }
-function drawCross(x, y, color, label){
-  ctx.strokeStyle = color; ctx.lineWidth = 1.6;
-  ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI*2); ctx.stroke();
-  ctx.beginPath();
-  ctx.moveTo(x-14,y); ctx.lineTo(x-5,y); ctx.moveTo(x+5,y); ctx.lineTo(x+14,y);
-  ctx.moveTo(x,y-14); ctx.lineTo(x,y-5); ctx.moveTo(x,y+5); ctx.lineTo(x,y+14);
-  ctx.stroke();
-  ctx.fillStyle = color;
-  ctx.beginPath(); ctx.arc(x, y, 1.6, 0, Math.PI*2); ctx.fill();
+function drawCross(g, x, y, color, label){
+  g.strokeStyle = color; g.lineWidth = 1.6;
+  g.beginPath(); g.arc(x, y, 9, 0, Math.PI*2); g.stroke();
+  g.beginPath();
+  g.moveTo(x-14,y); g.lineTo(x-5,y); g.moveTo(x+5,y); g.lineTo(x+14,y);
+  g.moveTo(x,y-14); g.lineTo(x,y-5); g.moveTo(x,y+5); g.lineTo(x,y+14);
+  g.stroke();
+  g.fillStyle = color;
+  g.beginPath(); g.arc(x, y, 1.6, 0, Math.PI*2); g.fill();
   if(label !== undefined){
-    ctx.font = '700 10px ui-monospace,Menlo,monospace';
-    const w = ctx.measureText(label).width + 8;
-    ctx.fillRect(x+10, y-20, w, 13);
-    ctx.fillStyle = '#fff';
-    ctx.fillText(label, x+14, y-10);
+    g.font = '700 10px ui-monospace,Menlo,monospace';
+    const w = g.measureText(label).width + 8;
+    g.fillRect(x+10, y-20, w, 13);
+    g.fillStyle = '#fff';
+    g.fillText(label, x+14, y-10);
   }
 }
 /* Estimated horizon: image of level (z=0) directions at infinity.
    Needs only orientation + intrinsics — position and origin don't matter,
    so it works the moment an image is loaded. Curved under distortion. */
-function drawHorizon(){
+function drawHorizon(g, mapPt){
   const R = rotFromYPR(params.yaw, params.pitch, params.roll);
   const fx = params.f, fy = params.f*params.aspect;
   const m = 0.35;
@@ -720,75 +721,69 @@ function drawHorizon(){
     const r2 = x*x + y*y, ds = 1 + params.k1*r2 + params.k2*r2*r2;
     return [fx*x*ds + params.cx, fy*y*ds + params.cy];
   };
-  ctx.strokeStyle = 'rgba(232,89,12,.9)';
-  ctx.lineWidth = 1.5;
-  ctx.setLineDash([8,5]);
-  ctx.beginPath();
+  g.strokeStyle = 'rgba(232,89,12,.9)';
+  g.lineWidth = 1.5;
+  g.setLineDash([8,5]);
+  g.beginPath();
   let pen = false, prev = null;
   for(let i=0; i<=1440; i++){
     const p = pixAt(i*0.25*D2R);
     if(!p){ pen = false; prev = null; continue; }
     if(prev && Math.hypot(p[0]-prev[0], p[1]-prev[1]) > state.imgW*0.1) pen = false;
-    const s = toScreen(p[0], p[1]);
-    if(!pen){ ctx.moveTo(s[0], s[1]); pen = true; } else ctx.lineTo(s[0], s[1]);
+    const s = mapPt(p[0], p[1]);
+    if(!pen){ g.moveTo(s[0], s[1]); pen = true; } else g.lineTo(s[0], s[1]);
     prev = p;
   }
-  ctx.stroke();
-  ctx.setLineDash([]);
+  g.stroke();
+  g.setLineDash([]);
   /* compass bearing ticks along the horizon */
   const cards = [[0,'N'],[45,'NE'],[90,'E'],[135,'SE'],[180,'S'],[225,'SW'],[270,'W'],[315,'NW']];
-  ctx.font = '700 10px ui-monospace,Menlo,monospace';
+  g.font = '700 10px ui-monospace,Menlo,monospace';
   for(const [azd, lab] of cards){
     const p = pixAt(azd*D2R);
     if(!p || p[0] < 0 || p[0] > state.imgW || p[1] < -state.imgH*0.1 || p[1] > state.imgH*1.1) continue;
-    const s = toScreen(p[0], p[1]);
-    ctx.strokeStyle = 'rgba(232,89,12,.9)'; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(s[0], s[1]-6); ctx.lineTo(s[0], s[1]+6); ctx.stroke();
-    const w = ctx.measureText(lab).width;
-    ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 3;
-    ctx.strokeText(lab, s[0]-w/2, s[1]-10);
-    ctx.fillStyle = 'rgba(232,89,12,1)';
-    ctx.fillText(lab, s[0]-w/2, s[1]-10);
+    const s = mapPt(p[0], p[1]);
+    g.strokeStyle = 'rgba(232,89,12,.9)'; g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(s[0], s[1]-6); g.lineTo(s[0], s[1]+6); g.stroke();
+    const w = g.measureText(lab).width;
+    g.strokeStyle = 'rgba(255,255,255,.85)'; g.lineWidth = 3;
+    g.strokeText(lab, s[0]-w/2, s[1]-10);
+    g.fillStyle = 'rgba(232,89,12,1)';
+    g.fillText(lab, s[0]-w/2, s[1]-10);
   }
 }
-function drawImage(){
-  const r = canvas.getBoundingClientRect();
-  ctx.clearRect(0, 0, r.width, r.height);
-  if(!state.img) return;
-  ctx.save();
-  ctx.imageSmoothingEnabled = viewT.s < 3;
-  ctx.translate(viewT.tx, viewT.ty);
-  ctx.scale(viewT.s, viewT.s);
-  ctx.drawImage(state.img, 0, 0);
-  ctx.restore();
-
+/* every overlay, drawn through an image-px -> destination-px transform.
+   Shared by the on-screen canvas (drawImage) and the agent's offscreen
+   render (renderAnnotatedFrame) so the user and the AI always see the
+   SAME picture — including the visibility checkboxes. */
+function drawOverlays(g, mapPt, scale){
   /* estimated horizon + compass */
-  if(document.getElementById('optHorizon').checked) drawHorizon();
+  if(document.getElementById('optHorizon').checked) drawHorizon(g, mapPt);
 
   const onlyRoads = document.getElementById('optOnlyRoads').checked;
 
   /* projected OSM roads: ground-level polylines */
   if(state.roads.length && camPose() && state.origin){
-    ctx.lineWidth = 1.6;
-    ctx.strokeStyle = 'rgba(232,89,12,.85)';
+    g.lineWidth = 1.6;
+    g.strokeStyle = 'rgba(232,89,12,.85)';
     for(const rd of state.roads){
-      ctx.beginPath();
+      g.beginPath();
       let started = false;
       for(const ll of rd.pts){
         const [e,n] = llToENU(ll[0], ll[1], state.origin);
         const q = projectWorld([e, n, 0]);
         if(!q){ started = false; continue; }
-        const [x,y] = toScreen(q[0], q[1]);
-        if(started) ctx.lineTo(x, y);
-        else { ctx.moveTo(x, y); started = true; }
+        const [x,y] = mapPt(q[0], q[1]);
+        if(started) g.lineTo(x, y);
+        else { g.moveTo(x, y); started = true; }
       }
-      ctx.stroke();
+      g.stroke();
     }
   }
 
   /* projected OSM footprints */
   if(!onlyRoads && document.getElementById('optShowFp').checked && state.footprints.length && camPose() && state.origin){
-    ctx.lineWidth = 1.4;
+    g.lineWidth = 1.4;
     for(const fp of state.footprints){
       const base = fp.ring.map(ll => {
         const [e,n] = llToENU(ll[0], ll[1], state.origin);
@@ -796,9 +791,9 @@ function drawImage(){
       });
       const seg = (a, b, style) => {
         if(!a || !b) return;
-        const A = toScreen(a[0],a[1]), B = toScreen(b[0],b[1]);
-        ctx.strokeStyle = style;
-        ctx.beginPath(); ctx.moveTo(A[0],A[1]); ctx.lineTo(B[0],B[1]); ctx.stroke();
+        const A = mapPt(a[0],a[1]), B = mapPt(b[0],b[1]);
+        g.strokeStyle = style;
+        g.beginPath(); g.moveTo(A[0],A[1]); g.lineTo(B[0],B[1]); g.stroke();
       };
       for(let i=0;i<base.length;i++){
         const j = (i+1)%base.length;
@@ -811,26 +806,26 @@ function drawImage(){
 
   /* projected OSM landmarks: small labeled diamonds at ground level */
   if(!onlyRoads && document.getElementById('optShowLm').checked && state.landmarks.length && camPose() && state.origin){
-    ctx.font = '600 9px ui-monospace,Menlo,monospace';
+    g.font = '600 9px ui-monospace,Menlo,monospace';
     for(const lm of state.landmarks){
       const [e,n] = llToENU(lm.lat, lm.lon, state.origin);
       const q = projectWorld([e, n, 0]);
       if(!q || q[0] < -50 || q[0] > state.imgW+50 || q[1] < -50 || q[1] > state.imgH+50) continue;
-      const [x,y] = toScreen(q[0], q[1]);
+      const [x,y] = mapPt(q[0], q[1]);
       const col = lmColor(lm.label);
-      ctx.save();
-      ctx.translate(x, y); ctx.rotate(Math.PI/4);
-      ctx.fillStyle = col;
-      ctx.fillRect(-3.5, -3.5, 7, 7);
-      ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
-      ctx.strokeRect(-3.5, -3.5, 7, 7);
-      ctx.restore();
-      if(viewT.s > 0.35 && state.landmarks.length <= 120){
+      g.save();
+      g.translate(x, y); g.rotate(Math.PI/4);
+      g.fillStyle = col;
+      g.fillRect(-3.5, -3.5, 7, 7);
+      g.strokeStyle = '#fff'; g.lineWidth = 1;
+      g.strokeRect(-3.5, -3.5, 7, 7);
+      g.restore();
+      if(scale > 0.35 && state.landmarks.length <= 120){
         const lab = lm.label.replace(/_/g, ' ');
-        ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = 2.5;
-        ctx.strokeText(lab, x+6, y-5);
-        ctx.fillStyle = col;
-        ctx.fillText(lab, x+6, y-5);
+        g.strokeStyle = 'rgba(255,255,255,.8)'; g.lineWidth = 2.5;
+        g.strokeText(lab, x+6, y-5);
+        g.fillStyle = col;
+        g.fillText(lab, x+6, y-5);
       }
     }
   }
@@ -842,64 +837,77 @@ function drawImage(){
     for(const m of state.aiMarks){
       if(!m.mask) continue;
       const rect = m.maskRect || { x: 0, y: 0, w: state.imgW, h: state.imgH };
-      ctx.save();
-      const [tx, ty] = toScreen(rect.x, rect.y);
-      ctx.translate(tx, ty);
-      const s = viewT.s * (rect.w / m.mask.width);
-      ctx.scale(s, s);
-      ctx.drawImage(m.mask, 0, 0);
-      ctx.restore();
+      g.save();
+      const [tx, ty] = mapPt(rect.x, rect.y);
+      g.translate(tx, ty);
+      const s = scale * (rect.w / m.mask.width);
+      g.scale(s, s);
+      g.drawImage(m.mask, 0, 0);
+      g.restore();
     }
-    ctx.font = '600 10px ui-monospace,Menlo,monospace';
+    g.font = '600 10px ui-monospace,Menlo,monospace';
     for(const m of state.aiMarks){
-      const [x,y] = toScreen(m.u, m.v);
-      ctx.strokeStyle = '#d6336c'; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI*2); ctx.stroke();
-      ctx.fillStyle = '#d6336c';
-      ctx.beginPath(); ctx.arc(x, y, 1.5, 0, Math.PI*2); ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,.8)'; ctx.lineWidth = 2.5;
-      ctx.strokeText(m.name, x+9, y-6);
-      ctx.fillText(m.name, x+9, y-6);
+      const [x,y] = mapPt(m.u, m.v);
+      g.strokeStyle = '#d6336c'; g.lineWidth = 2;
+      g.beginPath(); g.arc(x, y, 6, 0, Math.PI*2); g.stroke();
+      g.fillStyle = '#d6336c';
+      g.beginPath(); g.arc(x, y, 1.5, 0, Math.PI*2); g.fill();
+      g.strokeStyle = 'rgba(255,255,255,.8)'; g.lineWidth = 2.5;
+      g.strokeText(m.name, x+9, y-6);
+      g.fillText(m.name, x+9, y-6);
     }
   }
 
   /* point pairs: clicked crosshair + reprojection */
   state.pairs.forEach((p, i) => {
     const col = pairColor(i);
-    const [x,y] = toScreen(p.u, p.v);
+    const [x,y] = mapPt(p.u, p.v);
     if(state.origin){
       const q = projectWorld(pairWorld(p));
       if(q){
-        const [qx,qy] = toScreen(q[0], q[1]);
-        ctx.strokeStyle = col; ctx.setLineDash([4,3]); ctx.lineWidth = 1.2;
-        ctx.beginPath(); ctx.moveTo(x,y); ctx.lineTo(qx,qy); ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.fillStyle = col;
-        ctx.beginPath(); ctx.arc(qx, qy, 3.5, 0, Math.PI*2); ctx.fill();
-        ctx.strokeStyle = '#fff'; ctx.lineWidth = 1;
-        ctx.beginPath(); ctx.arc(qx, qy, 3.5, 0, Math.PI*2); ctx.stroke();
+        const [qx,qy] = mapPt(q[0], q[1]);
+        g.strokeStyle = col; g.setLineDash([4,3]); g.lineWidth = 1.2;
+        g.beginPath(); g.moveTo(x,y); g.lineTo(qx,qy); g.stroke();
+        g.setLineDash([]);
+        g.fillStyle = col;
+        g.beginPath(); g.arc(qx, qy, 3.5, 0, Math.PI*2); g.fill();
+        g.strokeStyle = '#fff'; g.lineWidth = 1;
+        g.beginPath(); g.arc(qx, qy, 3.5, 0, Math.PI*2); g.stroke();
       }
     }
     if(i === state.selPair){
-      ctx.strokeStyle = col; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.arc(x, y, 13, 0, Math.PI*2); ctx.stroke();
+      g.strokeStyle = col; g.lineWidth = 1;
+      g.beginPath(); g.arc(x, y, 13, 0, Math.PI*2); g.stroke();
     }
-    drawCross(x, y, col, String(i+1));
+    drawCross(g, x, y, col, String(i+1));
     if(p.celestial){
       const glyph = p.celestial === 'moon' ? '☾' : '☀';
-      ctx.font = '16px serif';
-      ctx.strokeStyle = 'rgba(0,0,0,.65)'; ctx.lineWidth = 3;
-      ctx.strokeText(glyph, x + 9, y + 15);
-      ctx.fillStyle = p.celestial === 'moon' ? '#ced4da' : '#ffd43b';
-      ctx.fillText(glyph, x + 9, y + 15);
+      g.font = '16px serif';
+      g.strokeStyle = 'rgba(0,0,0,.65)'; g.lineWidth = 3;
+      g.strokeText(glyph, x + 9, y + 15);
+      g.fillStyle = p.celestial === 'moon' ? '#ced4da' : '#ffd43b';
+      g.fillText(glyph, x + 9, y + 15);
     }
   });
 
   /* pending half-pair */
   if(state.pendingPixel){
-    const [x,y] = toScreen(state.pendingPixel[0], state.pendingPixel[1]);
-    drawCross(x, y, '#e8590c', '?');
+    const [x,y] = mapPt(state.pendingPixel[0], state.pendingPixel[1]);
+    drawCross(g, x, y, '#e8590c', '?');
   }
+}
+
+function drawImage(){
+  const r = canvas.getBoundingClientRect();
+  ctx.clearRect(0, 0, r.width, r.height);
+  if(!state.img) return;
+  ctx.save();
+  ctx.imageSmoothingEnabled = viewT.s < 3;
+  ctx.translate(viewT.tx, viewT.ty);
+  ctx.scale(viewT.s, viewT.s);
+  ctx.drawImage(state.img, 0, 0);
+  ctx.restore();
+  drawOverlays(ctx, toScreen, viewT.s);
 }
 
 /* pointer interaction */
@@ -1793,6 +1801,7 @@ function restoreAiMarks(list){
     }
     state.aiMarks.push(mark);
   }
+  refreshAiMarkChips();
   drawImage();
 }
 function snapshotProgress(includeMasks = true){
@@ -1974,6 +1983,7 @@ function renderAiList(items){
   const box = document.getElementById('aiLmList');
   box.innerHTML = '';
   state.aiMarks = [];
+  refreshAiMarkChips();
   for(const it of items){
     const row = document.createElement('div');
     row.className = 'ailm';
@@ -1992,9 +2002,30 @@ function renderAiList(items){
 document.getElementById('btnClearAiLm').onclick = () => {
   state.aiMarks = [];
   document.getElementById('aiLmList').innerHTML = '';
+  refreshAiMarkChips();
   drawImage();
   scheduleAutosave();
 };
+
+/* one chip per SAM3 mark/mask on the image, each individually removable */
+function refreshAiMarkChips(){
+  const box = document.getElementById('aiMarkChips');
+  box.innerHTML = '';
+  for(const m of state.aiMarks){
+    const b = document.createElement('button');
+    b.className = 'act';
+    b.textContent = '× ' + m.name;
+    b.title = 'Remove this mark and its mask from the image';
+    b.onclick = () => removeAiMark(m.name);
+    box.appendChild(b);
+  }
+}
+function removeAiMark(name){
+  state.aiMarks = state.aiMarks.filter(m => m.name !== name);
+  refreshAiMarkChips();
+  drawImage();
+  scheduleAutosave();
+}
 
 /* one SAM3 Space call on a crop of the frame (whole frame when region is
    null); returns the mask + the full-res rect it covers */
@@ -2032,6 +2063,7 @@ async function sam3Segment(query, region = null){
   const v = rect.y + mask.cy * (rect.h / mask.canvas.height);
   state.aiMarks = state.aiMarks.filter(a => a.name !== query);
   state.aiMarks.push({ name: query, u, v, mask: mask.canvas, maskRect: rect });
+  refreshAiMarkChips();
   drawImage();
   scheduleAutosave();
   return { u: +u.toFixed(1), v: +v.toFixed(1), instances: res.instances, zoomed };
@@ -2047,7 +2079,7 @@ async function segmentLandmark(it, out, btn){
     const { u, v } = res;
     /* rename the stored mark from the raw query to the landmark's name */
     const mark = state.aiMarks.find(a => a.name === query);
-    if(mark){ mark.name = it.name; scheduleAutosave(); }
+    if(mark){ mark.name = it.name; refreshAiMarkChips(); scheduleAutosave(); }
     out.innerHTML = `pixel (${u.toFixed(0)}, ${v.toFixed(0)}), ${res.instances} instance(s) <button class="act">Use as pair</button>`;
     out.querySelector('button').onclick = () => {
       state.pendingPixel = [u, v];
@@ -2132,7 +2164,9 @@ function agentGetState(){
 }
 
 /* offscreen render of the frame with all overlays at current parameters —
-   what the agent "sees" when it verifies calibration */
+   what the agent "sees". Uses the exact same drawOverlays pipeline (and
+   visibility checkboxes) as the on-screen canvas, so the user's view and
+   the AI's view never diverge. */
 function renderAnnotatedFrame(maxW = 1024){
   const s = Math.min(1, maxW / state.imgW);
   const c = document.createElement('canvas');
@@ -2140,68 +2174,7 @@ function renderAnnotatedFrame(maxW = 1024){
   c.height = Math.round(state.imgH * s);
   const g = c.getContext('2d');
   g.drawImage(state.img, 0, 0, c.width, c.height);
-  const posed = camPose() && state.origin;
-  const line = (a, b, style, w) => {
-    if(!a || !b) return;
-    g.strokeStyle = style; g.lineWidth = w;
-    g.beginPath(); g.moveTo(a[0]*s, a[1]*s); g.lineTo(b[0]*s, b[1]*s); g.stroke();
-  };
-  if(posed){
-    for(const rd of state.roads){
-      let prev = null;
-      for(const ll of rd.pts){
-        const [e, n] = llToENU(ll[0], ll[1], state.origin);
-        const q = projectWorld([e, n, 0]);
-        if(q && prev) line(prev, q, 'rgba(232,89,12,.9)', 2);
-        prev = q;
-      }
-    }
-    for(const fp of state.footprints){
-      const base = fp.ring.map(ll => {
-        const [e, n] = llToENU(ll[0], ll[1], state.origin);
-        return projectWorld([e, n, 0]);
-      });
-      for(let i = 0; i < base.length; i++) line(base[i], base[(i+1)%base.length], 'rgba(11,114,133,.95)', 1.6);
-    }
-    for(const lm of state.landmarks){
-      const [e, n] = llToENU(lm.lat, lm.lon, state.origin);
-      const q = projectWorld([e, n, 0]);
-      if(!q) continue;
-      g.fillStyle = lmColor(lm.label);
-      g.fillRect(q[0]*s - 2.5, q[1]*s - 2.5, 5, 5);
-    }
-  }
-  for(const m of state.aiMarks){
-    if(m.mask){
-      g.save(); g.globalAlpha = .85;
-      g.drawImage(m.mask, 0, 0, c.width, c.height); /* mask is frame-aligned */
-      g.restore();
-    }
-    g.strokeStyle = '#d6336c'; g.lineWidth = 2;
-    g.beginPath(); g.arc(m.u*s, m.v*s, 6, 0, Math.PI*2); g.stroke();
-    g.font = '600 11px monospace';
-    g.strokeStyle = 'rgba(255,255,255,.85)'; g.lineWidth = 3;
-    g.strokeText(m.name, m.u*s + 8, m.v*s - 6);
-    g.fillStyle = '#d6336c';
-    g.fillText(m.name, m.u*s + 8, m.v*s - 6);
-  }
-  state.pairs.forEach((p, i) => {
-    const x = p.u*s, y = p.v*s;
-    g.strokeStyle = pairColor(i); g.lineWidth = 2;
-    g.beginPath(); g.moveTo(x-8, y); g.lineTo(x+8, y); g.moveTo(x, y-8); g.lineTo(x, y+8); g.stroke();
-    g.font = '600 11px monospace';
-    g.fillStyle = pairColor(i);
-    g.fillText(String(i+1), x + 5, y - 5);
-    if(posed){
-      const q = projectWorld(pairWorld(p));
-      if(q){
-        g.fillStyle = pairColor(i);
-        g.beginPath(); g.arc(q[0]*s, q[1]*s, 3.5, 0, Math.PI*2); g.fill();
-        g.strokeStyle = '#fff'; g.lineWidth = 1;
-        g.beginPath(); g.arc(q[0]*s, q[1]*s, 3.5, 0, Math.PI*2); g.stroke();
-      }
-    }
-  });
+  drawOverlays(g, (u, v) => [u*s, v*s], s);
   return c.toDataURL('image/jpeg', 0.85);
 }
 
