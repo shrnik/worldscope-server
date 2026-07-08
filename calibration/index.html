@@ -2214,7 +2214,7 @@ function agentRemovePair(index){
 
 /* visual-servoing guardrails: per-call delta clamps, best-RMS snapshot,
    worsening-streak warnings, and an end-of-run auto-restore */
-const ADJUST_LIMITS = { d_yaw: 5, d_pitch: 3, d_roll: 2, d_f_pct: 10, d_height_m: 3 };
+const ADJUST_LIMITS = { d_yaw: 5, d_pitch: 3, d_roll: 2, d_f_pct: 10, d_height_m: 3, d_east_m: 5, d_north_m: 5 };
 let paramSnapshots = null;   // { start, best, bestRMS, worse } — one refine session
 function resetParamSnapshots(){ paramSnapshots = null; }
 function agentAdjustParams(deltas){
@@ -2226,6 +2226,14 @@ function agentAdjustParams(deltas){
   params.roll   = Math.max(-45, Math.min(45, params.roll + cl(deltas.d_roll, ADJUST_LIMITS.d_roll)));
   params.f      = Math.max(100, Math.min(8000, params.f * (1 + cl(deltas.d_f_pct, ADJUST_LIMITS.d_f_pct)/100)));
   params.height = Math.max(0.5, Math.min(120, params.height + cl(deltas.d_height_m, ADJUST_LIMITS.d_height_m)));
+  /* translation: the given camera GPS is rarely exact — shift it in local
+     east/north meters (position is part of the pose being refined) */
+  const dE = cl(deltas.d_east_m, ADJUST_LIMITS.d_east_m), dN = cl(deltas.d_north_m, ADJUST_LIMITS.d_north_m);
+  if((dE || dN) && params.lat !== null && state.origin){
+    const [e, n] = llToENU(params.lat, params.lon, state.origin);
+    [params.lat, params.lon] = enuToLL(e + dE, n + dN, state.origin);
+    placeCameraMarker();
+  }
   syncParamUI(); onParamsChanged(); refreshTable();
   const rms = state.lastRMS ?? null;
   let note = '';
@@ -2245,6 +2253,7 @@ function agentRevertParams(){
   const useBest = paramSnapshots.bestRMS != null;
   Object.assign(params, useBest ? paramSnapshots.best : paramSnapshots.start);
   paramSnapshots.worse = 0;
+  if(params.lat !== null) placeCameraMarker();
   syncParamUI(); onParamsChanged(); refreshTable();
   return { restored: useBest ? 'best-RMS snapshot' : 'session start', rms: state.lastRMS ?? null };
 }
@@ -2252,6 +2261,7 @@ function finalizeParamSnapshots(){
   if(paramSnapshots && paramSnapshots.bestRMS != null &&
      (state.lastRMS == null || state.lastRMS > paramSnapshots.bestRMS + 1e-9)){
     Object.assign(params, paramSnapshots.best);
+    if(params.lat !== null) placeCameraMarker();
     syncParamUI(); onParamsChanged(); refreshTable();
     agentLog('al-tool', `↩ run ended off its best — restored best-RMS parameters (${paramSnapshots.bestRMS.toFixed(2)} px)`);
   }
