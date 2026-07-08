@@ -362,6 +362,7 @@ footer .grow{flex:1}
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/suncalc@1.9.0/suncalc.min.js"></script>
+<script type="module" src="js/main.js"></script>
 <script>
 'use strict';
 /* =====================================================================
@@ -1295,67 +1296,11 @@ function updateReadouts(){
 }
 
 /* =====================================================================
-   GEOCALIB SEED  (hosted Gradio Space, browser client)
+   GEOCALIB SEED  (hosted Gradio Space; client lives in js/api/geocalib.js)
    Mirrors run_geocalib_remote(): estimates focal, k1, pitch, roll from
    the single loaded image. Yaw/position can't come from one image and
    are left untouched.
    ===================================================================== */
-const GEOCALIB_URL = 'https://shrnik-geocalib.hf.space';   // Hugging Face Space
-/* Plain-fetch client for the Space's REST API. The @gradio/client library
-   sends every request with credentials:'include', but the Space's preflight
-   responses omit Access-Control-Allow-Credentials, so browsers block it.
-   Credential-less fetch avoids the whole problem (the Space is public). */
-async function geoCalibPredict(blob){
-  /* saved HF token (Settings) is attached when present — needed for private
-     Spaces / better rate limits; anonymous access keeps working without it */
-  const auth = hfToken() ? { Authorization: 'Bearer ' + hfToken() } : {};
-  const fd = new FormData();
-  fd.append('files', blob, 'frame.jpg');
-  const upRes = await fetch(`${GEOCALIB_URL}/gradio_api/upload`, { method: 'POST', headers: auth, body: fd });
-  if(!upRes.ok) throw new Error(`upload failed (HTTP ${upRes.status})`);
-  const [path] = await upRes.json();
-  const callRes = await fetch(`${GEOCALIB_URL}/gradio_api/call/process_results`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...auth },
-    body: JSON.stringify({ data: [
-      { path, meta: { _type: 'gradio.FileData' } },
-      'simple_radial',
-      false, false, false, false, false,
-    ]}),
-  });
-  if(!callRes.ok) throw new Error(`call failed (HTTP ${callRes.status})`);
-  const { event_id } = await callRes.json();
-  const evRes = await fetch(`${GEOCALIB_URL}/gradio_api/call/process_results/${event_id}`, { headers: auth });
-  if(!evRes.ok) throw new Error(`result stream failed (HTTP ${evRes.status})`);
-  const text = await evRes.text();
-  /* SSE stream: find the data payload of the "complete" (or "error") event */
-  let event = null;
-  for(const line of text.split('\n')){
-    if(line.startsWith('event:')) event = line.slice(6).trim();
-    else if(line.startsWith('data:') && (event === 'complete' || event === 'error')){
-      const payload = JSON.parse(line.slice(5));
-      if(event === 'error') throw new Error(payload === null
-        ? 'Space rejected the call with no detail — usually ZeroGPU denying quota; save a valid HF token in Settings.'
-        : 'Space reported an error: ' + JSON.stringify(payload));
-      return payload;
-    }
-  }
-  throw new Error('Space stream ended without a result (it may be sleeping — retry in a minute).');
-}
-function parseGeoCalibText(raw, sentH){
-  const num = label => {
-    const m = raw.match(new RegExp(label + '[^\\-\\d]{0,12}(-?\\d+(?:\\.\\d+)?)', 'i'));
-    return m ? parseFloat(m[1]) : null;
-  };
-  const out = { roll: num('roll'), pitch: num('pitch'), k1: num('k1') };
-  let f = num('focal');
-  if(f === null){
-    const vfov = num('vfov') ?? num('v[ _-]?fov') ?? num('\\bfov');
-    if(vfov !== null) f = (sentH/2) / Math.tan(vfov*D2R/2);
-  }
-  out.f = f;
-  return out;
-}
 async function imageBlobForUpload(){
   /* cap the upload size; GeoCalib is scale-invariant except focal (rescaled after) */
   const maxSide = 1440;
@@ -1370,10 +1315,10 @@ async function imageBlobForUpload(){
 async function geoCalibSeed(){
   if(!state.img) throw new Error('no camera image loaded');
   const { blob, sentH } = await imageBlobForUpload();
-  const data = await geoCalibPredict(blob);
+  const data = await CalibExt.geocalib.geoCalibPredict(blob, hfToken());
   const raw = String(data[0] ?? '');
   console.log('GeoCalib raw output:\n' + raw);
-  const est = parseGeoCalibText(raw, sentH);
+  const est = CalibExt.geocalib.parseGeoCalibText(raw, sentH);
   if(est.f === null && est.pitch === null && est.roll === null)
     throw new Error('could not parse the GeoCalib response (see console for raw text)');
   const applied = [];
@@ -1551,20 +1496,9 @@ function addCelestialPair(body, timestampUtc, u, v){
 }
 
 /* =====================================================================
-   OSM CONTEXT  (Overpass API: building footprints + landmark nodes)
-   Landmark classes mirror fetch_context.py's DEFAULT_OSM_FILTERS.
+   OSM CONTEXT  (Overpass client lives in js/api/overpass.js; the Leaflet
+   rendering and app-state glue stay here)
    ===================================================================== */
-const OSM_LANDMARK_FILTERS = [
-  'node["highway"="street_lamp"]',
-  'node["man_made"="manhole"]',
-  'node["man_made"="utility_pole"]',
-  'node["power"="pole"]',
-  'node["highway"="traffic_signals"]',
-  'node["highway"="stop"]',
-  'node["traffic_sign"]',
-  'node["amenity"="bench"]',
-  'node["natural"="tree"]',
-];
 const LM_STYLE = {
   street_lamp:'#f59f00', traffic_signals:'#e03131', stop:'#e03131',
   manhole:'#495057', utility_pole:'#8d6e3f', pole:'#868e96',
@@ -1578,16 +1512,6 @@ const radR = document.getElementById('osmRadiusR'), radN = document.getElementBy
 radR.oninput = () => { radN.value = radR.value; updateCameraOnMap(); };
 radN.onchange = () => { radR.value = radN.value; updateCameraOnMap(); };
 
-function buildingHeight(tags){
-  if(!tags) return 6;
-  const h = parseFloat(tags.height); if(!isNaN(h)) return h;
-  const l = parseFloat(tags['building:levels']); if(!isNaN(l)) return l*3;
-  return 6;
-}
-function landmarkLabel(tags){
-  return tags.man_made || tags.highway || tags.power || tags.natural ||
-         tags.amenity || (tags.traffic_sign ? 'traffic_sign' : 'node');
-}
 function addLandmark(label, lat, lon){
   const lm = { label, lat, lon };
   const mk = L.circleMarker([lat, lon], {
@@ -1627,44 +1551,8 @@ async function fetchOSM(r){
   const lat = params.lat ?? state.origin?.lat, lon = params.lon ?? state.origin?.lon;
   if(lat === undefined || lat === null) throw new Error('place the camera or origin first');
   {
-    /* bbox covering ±radius around the camera: [bbox:south,west,north,east] */
-    const dLat = r / 111320, dLon = r / (111320 * Math.cos(lat * D2R));
-    const bbox = [lat - dLat, lon - dLon, lat + dLat, lon + dLon]
-      .map(v => v.toFixed(7)).join(',');
-    var query = `
-      [bbox:${bbox}]
-      [out:json]
-      [timeout:90]
-      ;
-      (
-        way["building"];
-        way["highway"];
-        ${OSM_LANDMARK_FILTERS.map(f => f + ';').join('\n        ')}
-      );
-      out body geom;
-    `;
-    /* Content-Type must be form-urlencoded — a bare string body is sent as
-       text/plain and overpass-api.de answers 406. Mirrors tried in order. */
-    const ENDPOINTS = [
-      'https://overpass-api.de/api/interpreter',
-      'https://overpass.kumi.systems/api/interpreter',
-      'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
-    ];
-    let data = null, lastErr = null;
-    for(const ep of ENDPOINTS){
-      try{
-        data = await fetch(ep, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: 'data=' + encodeURIComponent(query),
-        }).then(resp => {
-          if(!resp.ok) throw new Error('HTTP ' + resp.status + ' from ' + new URL(ep).host);
-          return resp.json();
-        });
-        break;
-      }catch(err){ lastErr = err; }
-    }
-    if(!data) throw lastErr || new Error('all Overpass endpoints failed');
+    const { buildCalibrationQuery, overpassFetch, buildingHeight, landmarkLabel } = CalibExt.overpass;
+    const data = await overpassFetch(buildCalibrationQuery(lat, lon, r));
     clearOSM();
     for(const el of data.elements || []){
       if(el.type === 'way' && el.geometry && el.geometry.length >= 3 && el.tags?.building){
@@ -1886,9 +1774,9 @@ document.getElementById('importFile').onchange = e => {
 };
 
 /* =====================================================================
-   AI LANDMARKS  (VLM via HF Inference Providers -> SAM3 Space -> Wikipedia)
+   AI LANDMARKS  (VLM via HF Inference Providers -> SAM3 Space -> Wikipedia;
+   the network clients live in js/api/, orchestration + app state stay here)
    ===================================================================== */
-const SAM3_URL = 'https://shrnik-sam3-demo.hf.space';
 const VLM_KEY = 'ground-camera-calibrator.vlmModel';
 const vlmModelInput = document.getElementById('vlmModel');
 vlmModelInput.value = localStorage.getItem(VLM_KEY) || vlmModelInput.value;
@@ -1914,36 +1802,8 @@ function frameForAI(maxW = 1024, region = null){
   });
 }
 
-/* extract the final payload from a gradio /call SSE result stream */
-function parseGradioSSE(text){
-  let event = null;
-  for(const line of text.split('\n')){
-    if(line.startsWith('event:')) event = line.slice(6).trim();
-    else if(line.startsWith('data:') && (event === 'complete' || event === 'error')){
-      const payload = JSON.parse(line.slice(5));
-      if(event === 'error') throw new Error(payload === null
-        ? 'Space rejected the call with no detail — usually ZeroGPU denying quota; save a valid HF token in Settings.'
-        : 'Space reported an error: ' + JSON.stringify(payload));
-      return payload;
-    }
-  }
-  throw new Error('Space stream ended without a result (it may be sleeping — retry in a minute).');
-}
-
-async function vlmChat(content){
-  if(!hfToken()) throw new Error('save an HF token in Settings first');
-  const res = await fetch('https://router.huggingface.co/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + hfToken() },
-    body: JSON.stringify({
-      model: vlmModelInput.value.trim(),
-      messages: [{ role: 'user', content }],
-      max_tokens: 1024,
-      temperature: 0.2,
-    }),
-  });
-  if(!res.ok) throw new Error(`VLM HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
-  return (await res.json()).choices[0].message.content;
+function vlmChat(content){
+  return CalibExt.vlm.vlmChat(content, { model: vlmModelInput.value.trim(), token: hfToken() });
 }
 
 document.getElementById('btnDetectLm').onclick = async () => {
@@ -2000,81 +1860,11 @@ document.getElementById('btnClearAiLm').onclick = () => {
   scheduleAutosave();
 };
 
-/* load a SAM3 mask image: centroid of its non-empty pixels + a magenta-tinted
-   translucent overlay canvas for drawing on the camera image */
-function loadMask(url){
-  return new Promise((resolve, reject) => {
-    const im = new Image();
-    im.crossOrigin = 'anonymous';
-    im.onload = () => {
-      const w = im.naturalWidth, h = im.naturalHeight;
-      const c = document.createElement('canvas');
-      c.width = w; c.height = h;
-      const g = c.getContext('2d');
-      g.drawImage(im, 0, 0);
-      const src = g.getImageData(0, 0, w, h);
-      const d = src.data;
-      const tint = g.createImageData(w, h);
-      const t = tint.data;
-      let sx = 0, sy = 0, n = 0;
-      let bx0 = w, by0 = h, bx1 = 0, by1 = 0;
-      for(let y = 0; y < h; y++) for(let x = 0; x < w; x++){
-        const i = (y*w + x) * 4;
-        if(d[i+3] > 127 && (d[i] + d[i+1] + d[i+2]) > 30){
-          sx += x; sy += y; n++;
-          if(x < bx0) bx0 = x; if(x > bx1) bx1 = x;
-          if(y < by0) by0 = y; if(y > by1) by1 = y;
-          t[i] = 214; t[i+1] = 51; t[i+2] = 108; t[i+3] = 110;   // translucent #d6336c
-        }
-      }
-      if(!n) return reject(new Error('empty mask'));
-      g.putImageData(tint, 0, 0);
-      resolve({ cx: sx/n, cy: sy/n, bx0, by0, bx1, by1, canvas: c });
-    };
-    im.onerror = () => reject(new Error('mask image load failed'));
-    im.src = url;
-  });
-}
-
-/* one SAM3 Space call on a crop of the frame (whole frame when region is null);
-   returns the mask + the full-res rect it covers */
+/* one SAM3 Space call on a crop of the frame (whole frame when region is
+   null); returns the mask + the full-res rect it covers */
 async function sam3Call(query, region){
-  const { blob, ox, oy, rw, rh } = await frameForAI(1024, region);
-  /* the Space runs on ZeroGPU: anonymous API calls are rejected by the GPU
-     scheduler (SSE answers "event: error, data: null") — authenticate with
-     the HF token so the call gets quota */
-  const auth = hfToken() ? { Authorization: 'Bearer ' + hfToken() } : {};
-  const fd = new FormData();
-  fd.append('files', blob, 'frame.jpg');
-  const up = await fetch(`${SAM3_URL}/gradio_api/upload`, { method: 'POST', headers: auth, body: fd });
-  if(!up.ok) throw new Error('upload HTTP ' + up.status);
-  const [path] = await up.json();
-  const runOnce = async () => {
-    const call = await fetch(`${SAM3_URL}/gradio_api/call/run_image_segmentation`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...auth },
-      body: JSON.stringify({ data: [ { path, meta: { _type: 'gradio.FileData' } }, query, 0.45 ] }),
-    });
-    if(!call.ok) throw new Error('call HTTP ' + call.status);
-    const { event_id } = await call.json();
-    const txt = await (await fetch(`${SAM3_URL}/gradio_api/call/run_image_segmentation/${event_id}`, { headers: auth })).text();
-    return parseGradioSSE(txt);
-  };
-  let payload;
-  try{ payload = await runOnce(); }
-  catch(err){
-    /* the SSE stream sometimes ends empty (Space waking up / idle connection
-       cut); the event result is gone once read, so re-run the call once */
-    if(!/stream ended without a result/.test(err.message)) throw err;
-    payload = await runOnce();
-  }
-  /* AnnotatedImage payload: {image, annotations:[{image:FileData, label}]}; tolerate tuples */
-  const ann = payload?.[0]?.annotations || [];
-  if(!ann.length) throw new Error(`SAM3 found no match for "${query}"`);
-  const maskUrl = ann[0]?.image?.url || ann[0]?.[0]?.url || ann[0]?.url;
-  if(!maskUrl) throw new Error('unexpected mask payload shape');
-  const mask = await loadMask(maskUrl);
-  return { mask, rect: { x: ox, y: oy, w: rw, h: rh }, instances: ann.length };
+  const frame = await frameForAI(1024, region);
+  return CalibExt.sam3.sam3Call(frame, query, hfToken());
 }
 
 /* text query -> SAM3 -> {u, v, instances} in full-res pixels; stores the mask +
@@ -2137,20 +1927,9 @@ async function segmentLandmark(it, out, btn){
   }
 }
 
-/* landmark name -> Wikipedia search + summary */
-async function wikiLookup(name){
-  const s = await fetch('https://en.wikipedia.org/w/api.php?action=query&list=search&format=json&origin=*&srlimit=1&srsearch=' +
-    encodeURIComponent(name)).then(r => r.json());
-  const hit = s.query?.search?.[0];
-  if(!hit) throw new Error('no Wikipedia match for "' + name + '"');
-  const sum = await fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' +
-    encodeURIComponent(hit.title)).then(r => r.json());
-  return {
-    title: sum.title,
-    extract: sum.extract || '',
-    url: sum.content_urls?.desktop?.page || null,
-    coordinates: sum.coordinates ? { lat: sum.coordinates.lat, lon: sum.coordinates.lon } : null,
-  };
+/* landmark name -> Wikipedia search + summary (client in js/api/wikipedia.js) */
+function wikiLookup(name){
+  return CalibExt.wikipedia.wikiLookup(name);
 }
 
 async function lookupLandmark(it, out, btn){
