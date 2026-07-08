@@ -244,6 +244,8 @@ footer .grow{flex:1}
         <span style="color:var(--muted);font-family:var(--mono);font-size:11px">ground elev (m)</span>
         <input class="small" type="number" id="datumN" step="0.1" placeholder="auto">
       </div>
+      <button class="act" id="btnFetchElev" title="Look up real terrain elevation (DEM) for each map point, so z reflects the actual ground instead of a flat plane">Fetch terrain elevations</button>
+      <label class="checkline" title="Automatically look up terrain elevation whenever a pair is added"><input type="checkbox" id="optAutoElev"> Auto elevation for new pairs</label>
       <table id="ptTable">
         <thead><tr><th></th><th>name</th><th>px u,v</th><th>lat</th><th>lon</th><th>z</th><th>err</th><th></th></tr></thead>
         <tbody></tbody>
@@ -1120,6 +1122,7 @@ function addPair(u, v, lat, lon, label){
   mk.on('click', () => selectPair(state.pairs.indexOf(p)));
   state.pairs.push(p);
   updateResiduals(); refreshTable(); drawImage();
+  scheduleAutoElevation();
 }
 function removePair(i){
   map.removeLayer(state.pairs[i].marker);
@@ -1251,6 +1254,54 @@ document.getElementById('csvFile').onchange = e => {
   rd.readAsText(file);
   e.target.value = '';
 };
+/* =====================================================================
+   TERRAIN ELEVATIONS  (client in js/api/elevation.js)
+   Map points default to z=0 (flat ground). A DEM lookup replaces that with
+   the real terrain height: datum = elevation at the origin, each pair's
+   z = its terrain elevation - datum. Only pairs without a user/CSV altitude
+   and still at z=0 are touched; celestial pairs never are.
+   ===================================================================== */
+async function ensureDatum(){
+  if(isFinite(state.datum)) return state.datum;
+  if(!state.origin) throw new Error('set the origin first');
+  const manual = parseFloat(datumInput.value);
+  if(isFinite(manual)){ state.datum = manual; return manual; }
+  const [elev] = await CalibExt.elevation.fetchElevations([{ lat: state.origin.lat, lon: state.origin.lon }]);
+  state.datum = elev;
+  datumInput.value = elev.toFixed(1);
+  return elev;
+}
+async function fetchPairElevations(){
+  await ensureDatum();
+  const targets = state.pairs.filter(p => !p.celestial && p.alt === undefined && p.z === 0);
+  if(!targets.length) return 0;
+  const elevs = await CalibExt.elevation.fetchElevations(targets.map(p => ({ lat: p.lat, lon: p.lon })));
+  targets.forEach((p, i) => { p.alt = elevs[i]; p.z = elevs[i] - state.datum; });
+  updateResiduals(); refreshTable(); drawImage();
+  return targets.length;
+}
+document.getElementById('btnFetchElev').onclick = async () => {
+  const btn = document.getElementById('btnFetchElev');
+  if(!state.pairs.length) return setMsg('No point pairs yet — add some first.');
+  btn.disabled = true; btn.textContent = 'Fetching…';
+  try{
+    const n = await fetchPairElevations();
+    setMsg(n ? `Terrain elevation applied to ${n} pair(s) (z = elevation − ${state.datum.toFixed(1)} m datum).`
+             : 'No pairs needed terrain elevation (all have altitudes or z values already).');
+  }catch(err){
+    setMsg('Elevation lookup failed: ' + err.message);
+  }finally{
+    btn.disabled = false; btn.textContent = 'Fetch terrain elevations';
+  }
+};
+let elevAutoTimer = null;
+function scheduleAutoElevation(){
+  if(!document.getElementById('optAutoElev').checked || restoringProgress) return;
+  clearTimeout(elevAutoTimer);
+  elevAutoTimer = setTimeout(() => fetchPairElevations().catch(err =>
+    console.warn('auto elevation lookup failed:', err.message)), 600);
+}
+
 /* editing ground elevation re-derives z for points imported with altitudes */
 datumInput.addEventListener('change', () => {
   const d = parseFloat(datumInput.value);
@@ -2083,9 +2134,19 @@ async function agentAddPair({ u, v, lat, lon, z_m, label }){
   if(!state.origin) throw new Error('origin is not set — call set_camera_position first');
   addPair(u, v, lat, lon, label);
   const p = state.pairs.at(-1);
-  if(typeof z_m === 'number') p.z = z_m;
+  if(typeof z_m === 'number'){
+    p.z = z_m;
+  } else {
+    /* no explicit height: ground the point on real terrain instead of z=0 */
+    try{
+      await ensureDatum();
+      const [elev] = await CalibExt.elevation.fetchElevations([{ lat, lon }]);
+      p.alt = elev;
+      p.z = elev - state.datum;
+    }catch(err){ console.warn('pair elevation lookup failed:', err.message); }
+  }
   updateResiduals(); refreshTable(); drawImage();
-  return { pair_index: state.pairs.length - 1, pair_count: state.pairs.length };
+  return { pair_index: state.pairs.length - 1, pair_count: state.pairs.length, z_m: +p.z.toFixed(1) };
 }
 function agentRemovePair(index){
   if(!state.pairs[index]) throw new Error('no pair at index ' + index);

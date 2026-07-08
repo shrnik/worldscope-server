@@ -38,7 +38,7 @@ export const AGENT_TOOLS = [
       height_m: { type: 'number', description: 'Camera height above local ground in meters, if known (e.g. rooftop mount)' },
     }, required: ['lat', 'lon'], additionalProperties: false } },
   { name: 'add_pair',
-    description: 'Add an image<->world correspondence: pixel (u,v) in the full-resolution frame paired with a world coordinate (lat, lon, optional height above local ground in meters).',
+    description: 'Add an image<->world correspondence: pixel (u,v) in the full-resolution frame paired with a world coordinate (lat, lon, optional height above local ground in meters). When z_m is omitted the point is grounded on real terrain via a DEM lookup (the returned z_m is the applied value).',
     input_schema: { type: 'object', properties: {
       u: { type: 'number' }, v: { type: 'number' },
       lat: { type: 'number' }, lon: { type: 'number' },
