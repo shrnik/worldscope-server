@@ -99,13 +99,20 @@ export async function executeAgentTool(host, name, input){
       return annotatedViewBlocks(host);
     case 'fetch_osm': {
       const res = await host.fetchOSM(Math.min(600, Math.max(50, input.radius_m)));
-      const landmarks = host.landmarks().slice(0, 150).map(l => ({ type: l.label, lat: +l.lat.toFixed(7), lon: +l.lon.toFixed(7) }));
+      /* nearest landmarks first — the payload is capped and close features
+         are the most likely to be identifiable in the frame */
+      const st = host.getState();
+      const cam = st.camera?.lat != null ? st.camera : st.origin;
+      const d2 = l => cam ? (l.lat - cam.lat)**2 + ((l.lon - cam.lon) * Math.cos(cam.lat * Math.PI/180))**2 : 0;
+      const landmarks = [...host.landmarks()].sort((a, b) => d2(a) - d2(b)).slice(0, 150)
+        .map(l => ({ type: l.label, lat: +l.lat.toFixed(7), lon: +l.lon.toFixed(7),
+                     ...(l.height ? { height_m: l.height } : {}) }));
       const buildings = host.footprints().slice(0, 40).map(fp => ({
         height_m: fp.height,
         corners: fp.ring.slice(0, 12).map(c => [+c[0].toFixed(7), +c[1].toFixed(7)]),
       }));
       return { counts: res, landmarks, buildings,
-        note: 'corner/landmark coordinates are exact — prefer them as the world side of pairs' };
+        note: 'corner/landmark coordinates are exact — prefer them as the world side of pairs. Landmarks with height_m are tall vertical structures: pair their base at z=0 or their top at z=height_m.' };
     }
     case 'segment_object': {
       let region = null;

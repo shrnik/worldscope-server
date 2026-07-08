@@ -13,6 +13,13 @@ export const OSM_LANDMARK_FILTERS = [
   'node["traffic_sign"]',
   'node["amenity"="bench"]',
   'node["natural"="tree"]',
+  /* precisely-locatable vertical structures — great calibration anchors,
+     especially when they carry a height tag (pair top with z=height) */
+  'node["power"~"^(tower|portal)$"]',
+  'node["man_made"~"^(mast|tower|antenna|chimney|water_tower|flagpole|lighthouse|communications_tower|windmill|cross|obelisk|monitoring_station)$"]',
+  'node["power"="generator"]["generator:source"="wind"]',
+  'node["highway"="crossing"]',
+  'node["advertising"="billboard"]',
 ];
 
 /* [south, west, north, east] covering ±radius meters around a point */
@@ -70,6 +77,17 @@ export function buildingHeight(tags){
 }
 
 export function landmarkLabel(tags){
+  if(tags.power === 'generator') return 'wind_turbine';
+  if(tags.advertising) return 'billboard';
   return tags.man_made || tags.highway || tags.power || tags.natural ||
          tags.amenity || (tags.traffic_sign ? 'traffic_sign' : 'node');
+}
+
+/* tagged structure height in meters, when present (masts, towers, chimneys…) */
+export function landmarkHeight(tags){
+  for(const k of ['height', 'tower:height', 'est_height']){
+    const h = parseFloat(tags?.[k]);
+    if(!isNaN(h)) return h;
+  }
+  return null;
 }

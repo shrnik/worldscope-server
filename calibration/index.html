@@ -1554,6 +1554,10 @@ const LM_STYLE = {
   street_lamp:'#f59f00', traffic_signals:'#e03131', stop:'#e03131',
   manhole:'#495057', utility_pole:'#8d6e3f', pole:'#868e96',
   tree:'#2f9e44', bench:'#9c36b5', traffic_sign:'#1971c2', sign:'#1971c2',
+  mast:'#5f3dc4', tower:'#5f3dc4', antenna:'#5f3dc4', communications_tower:'#5f3dc4',
+  chimney:'#c92a2a', water_tower:'#1864ab', flagpole:'#868e96', lighthouse:'#e8590c',
+  windmill:'#2b8a3e', wind_turbine:'#2b8a3e', cross:'#9c36b5', obelisk:'#9c36b5',
+  crossing:'#1971c2', billboard:'#d9480f',
 };
 const lmColor = label => LM_STYLE[label] || '#0b7285';
 const lmLayer = L.layerGroup().addTo(map);
@@ -1563,12 +1567,12 @@ const radR = document.getElementById('osmRadiusR'), radN = document.getElementBy
 radR.oninput = () => { radN.value = radR.value; updateCameraOnMap(); };
 radN.onchange = () => { radR.value = radN.value; updateCameraOnMap(); };
 
-function addLandmark(label, lat, lon){
-  const lm = { label, lat, lon };
+function addLandmark(label, lat, lon, height = null){
+  const lm = { label, lat, lon, height };
   const mk = L.circleMarker([lat, lon], {
     radius: 4, weight: 1.5, color: '#fff', fillColor: lmColor(label), fillOpacity: 0.95,
   }).addTo(lmLayer);
-  mk.bindTooltip(label.replace(/_/g, ' '), { direction: 'top', offset: [0, -4] });
+  mk.bindTooltip(label.replace(/_/g, ' ') + (height ? ` · ${height} m` : ''), { direction: 'top', offset: [0, -4] });
   mk.on('click', e => {
     /* clicking a landmark while placing a pair uses its exact coordinates */
     if(state.mode === 'pair-map' && state.pendingPixel){
@@ -1602,7 +1606,7 @@ async function fetchOSM(r){
   const lat = params.lat ?? state.origin?.lat, lon = params.lon ?? state.origin?.lon;
   if(lat === undefined || lat === null) throw new Error('place the camera or origin first');
   {
-    const { buildCalibrationQuery, overpassFetch, buildingHeight, landmarkLabel } = CalibExt.overpass;
+    const { buildCalibrationQuery, overpassFetch, buildingHeight, landmarkLabel, landmarkHeight } = CalibExt.overpass;
     const data = await overpassFetch(buildCalibrationQuery(lat, lon, r));
     clearOSM();
     for(const el of data.elements || []){
@@ -1615,7 +1619,7 @@ async function fetchOSM(r){
         const layer = L.polyline(pts, { color:'#e8590c', weight:2, opacity:.8 }).addTo(roadLayer);
         state.roads.push({ pts, layer });
       } else if(el.type === 'node' && el.tags){
-        addLandmark(landmarkLabel(el.tags), el.lat, el.lon);
+        addLandmark(landmarkLabel(el.tags), el.lat, el.lon, landmarkHeight(el.tags));
       }
     }
     document.getElementById('fpCount').textContent = state.footprints.length;
