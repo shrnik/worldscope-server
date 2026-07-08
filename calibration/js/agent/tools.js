@@ -61,6 +61,18 @@ export const AGENT_TOOLS = [
       key: { type: 'string', enum: ['yaw', 'pitch', 'roll', 'f', 'height', 'k1', 'k2'] },
       value: { type: 'number' },
     }, required: ['key', 'value'], additionalProperties: false } },
+  { name: 'adjust_params',
+    description: 'Nudge pose parameters by small deltas and see the result: applies the deltas (clamped per call: |d_yaw|<=5, |d_pitch|<=3, |d_roll|<=2 degrees, |d_f_pct|<=10 percent, |d_height_m|<=3 m), then returns the fresh annotated render plus the new parameters and RMS. Reading the render: wireframe shifted LEFT of its image features => positive d_yaw (shifted right => negative); projected verticals leaning vs real ones => d_roll; ground geometry sitting too high/low => d_pitch and/or d_height_m; everything uniformly too large/small => d_f_pct. Make ONE small adjustment per call and compare renders. RMS may be n/a when no pairs exist — judge visually.',
+    input_schema: { type: 'object', properties: {
+      d_yaw: { type: 'number', description: 'Yaw delta in degrees (clamped to ±5)' },
+      d_pitch: { type: 'number', description: 'Pitch delta in degrees (clamped to ±3)' },
+      d_roll: { type: 'number', description: 'Roll delta in degrees (clamped to ±2)' },
+      d_f_pct: { type: 'number', description: 'Focal length change in percent (clamped to ±10)' },
+      d_height_m: { type: 'number', description: 'Camera height delta in meters (clamped to ±3)' },
+    }, additionalProperties: false } },
+  { name: 'revert_params',
+    description: 'Restore the best-RMS parameter snapshot recorded during this refinement session (or the session-start parameters when no RMS is available). Use when adjustments made things worse.',
+    input_schema: { type: 'object', properties: {}, additionalProperties: false } },
   { name: 'solve_pose',
     description: 'Solve the full camera pose from the current pairs (needs 4+; 6+ for distortion). Writes the solution to the parameters and returns RMS plus per-pair reprojection errors.',
     input_schema: { type: 'object', properties: {
@@ -144,6 +156,16 @@ export async function executeAgentTool(host, name, input){
     case 'set_param':
       host.setParam(input.key, input.value);
       return { [input.key]: input.value };
+    case 'adjust_params': {
+      const r = host.adjustParams(input ?? {});
+      const blocks = annotatedViewBlocks(host, r.note);
+      blocks.push({ type: 'text', text:
+        'Params now: ' + JSON.stringify(host.getState().params) +
+        ' · best RMS this session: ' + (r.best_rms != null ? r.best_rms.toFixed(2) + ' px' : 'n/a') });
+      return blocks;
+    }
+    case 'revert_params':
+      return host.revertParams();
     case 'solve_pose':
       return host.solvePose({ solveFocal: !!input.solve_focal, solveDistortion: !!input.solve_distortion });
     case 'celestial_position':
@@ -166,6 +188,7 @@ export function agentToolSummary(name, out){
       case 'add_pair':            return `#${out.pair_index + 1} (${out.pair_count} total)`;
       case 'wikipedia_lookup':    return out.coordinates ? `@ ${out.coordinates.lat.toFixed(5)}, ${out.coordinates.lon.toFixed(5)}` : 'no coordinates';
       case 'set_camera_position': return `${out.camera.lat.toFixed(5)}, ${out.camera.lon.toFixed(5)}`;
+      case 'revert_params':       return `${out.restored}${out.rms != null ? ` · RMS ${out.rms.toFixed(2)} px` : ''}`;
       case 'celestial_position':  return `az ${out.azimuth_deg}° el ${out.elevation_deg}°`;
       case 'add_celestial_pair':  return `az ${out.azimuth_deg}° el ${out.elevation_deg}° → #${out.pair_index + 1}`;
     }

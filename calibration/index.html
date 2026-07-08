@@ -272,6 +272,7 @@ footer .grow{flex:1}
       <label class="checkline"><input type="checkbox" id="optFocal" checked> Also solve focal length</label>
       <label class="checkline"><input type="checkbox" id="optDist"> Also solve distortion k1, k2 <span style="color:var(--muted)">(needs 6+ pts)</span></label>
       <button class="act primary" id="btnCalibrate">Solve camera pose</button>
+      <button class="act" id="btnRefineAI" title="A vision model looks at the projected OSM wireframe over the photo and nudges yaw/pitch/roll/focal/height until they visually align. Needs the HF token from Settings and OSM data (section 6). Progress appears in the section 8 log.">AI refine alignment (visual)</button>
       <div id="calibResult"></div>
     </div>
   </details>
@@ -2238,6 +2239,52 @@ function agentRemovePair(index){
   return { pair_count: state.pairs.length };
 }
 
+/* visual-servoing guardrails: per-call delta clamps, best-RMS snapshot,
+   worsening-streak warnings, and an end-of-run auto-restore */
+const ADJUST_LIMITS = { d_yaw: 5, d_pitch: 3, d_roll: 2, d_f_pct: 10, d_height_m: 3 };
+let paramSnapshots = null;   // { start, best, bestRMS, worse } — one refine session
+function resetParamSnapshots(){ paramSnapshots = null; }
+function agentAdjustParams(deltas){
+  paramSnapshots ??= { start: { ...params }, best: { ...params }, bestRMS: state.lastRMS ?? null, worse: 0 };
+  const cl = (v, m) => Math.max(-m, Math.min(m, +v || 0));
+  const wrap180 = a => ((a + 180) % 360 + 360) % 360 - 180;
+  params.yaw    = wrap180(params.yaw + cl(deltas.d_yaw, ADJUST_LIMITS.d_yaw));
+  params.pitch  = Math.max(-90, Math.min(90, params.pitch + cl(deltas.d_pitch, ADJUST_LIMITS.d_pitch)));
+  params.roll   = Math.max(-45, Math.min(45, params.roll + cl(deltas.d_roll, ADJUST_LIMITS.d_roll)));
+  params.f      = Math.max(100, Math.min(8000, params.f * (1 + cl(deltas.d_f_pct, ADJUST_LIMITS.d_f_pct)/100)));
+  params.height = Math.max(0.5, Math.min(120, params.height + cl(deltas.d_height_m, ADJUST_LIMITS.d_height_m)));
+  syncParamUI(); onParamsChanged(); refreshTable();
+  const rms = state.lastRMS ?? null;
+  let note = '';
+  if(rms != null){
+    if(paramSnapshots.bestRMS == null || rms < paramSnapshots.bestRMS){
+      paramSnapshots.bestRMS = rms;
+      paramSnapshots.best = { ...params };
+      paramSnapshots.worse = 0;
+    } else if(++paramSnapshots.worse >= 3){
+      note = 'RMS has worsened 3 adjustments in a row — call revert_params, then stop or change strategy. ';
+    }
+  }
+  return { note, rms, best_rms: paramSnapshots.bestRMS };
+}
+function agentRevertParams(){
+  if(!paramSnapshots) throw new Error('nothing to revert — no adjustments made this session');
+  const useBest = paramSnapshots.bestRMS != null;
+  Object.assign(params, useBest ? paramSnapshots.best : paramSnapshots.start);
+  paramSnapshots.worse = 0;
+  syncParamUI(); onParamsChanged(); refreshTable();
+  return { restored: useBest ? 'best-RMS snapshot' : 'session start', rms: state.lastRMS ?? null };
+}
+function finalizeParamSnapshots(){
+  if(paramSnapshots && paramSnapshots.bestRMS != null &&
+     (state.lastRMS == null || state.lastRMS > paramSnapshots.bestRMS + 1e-9)){
+    Object.assign(params, paramSnapshots.best);
+    syncParamUI(); onParamsChanged(); refreshTable();
+    agentLog('al-tool', `↩ run ended off its best — restored best-RMS parameters (${paramSnapshots.bestRMS.toFixed(2)} px)`);
+  }
+  paramSnapshots = null;
+}
+
 /* the single seam between the page and js/agent/: everything the tool
    executors and the runner need, as one object */
 function agentHost(){
@@ -2260,6 +2307,8 @@ function agentHost(){
     addPair: agentAddPair,
     removePair: agentRemovePair,
     setParam: (key, value) => { paramInputs[key].set(value); onParamsChanged(); },
+    adjustParams: agentAdjustParams,
+    revertParams: agentRevertParams,
     solvePose,
     celestialPosition,
     addCelestialPair,
@@ -2282,6 +2331,7 @@ function agentButtons(running, hasContext){
   document.getElementById('btnAgentRun').disabled = running;
   document.getElementById('btnAgentStop').disabled = !running;
   document.getElementById('btnAgentContinue').disabled = running || !hasContext;
+  document.getElementById('btnRefineAI').disabled = running;
 }
 
 let agentRunner = null;   // survives interrupts so Continue can resume the run
@@ -2292,7 +2342,8 @@ document.getElementById('btnAgentRun').onclick = async () => {
   if(!state.img) return setMsg('Load a camera image first.');
   if(!hfToken()) return setMsg('Save an HF token in Settings first.');
   document.getElementById('agentLog').innerHTML = '';
-  agentRunner = CalibExt.createAgentRunner(agentHost());
+  resetParamSnapshots();
+  agentRunner = CalibExt.createAgentRunner(agentHost(), { onFinish: finalizeParamSnapshots });
   const goal = document.getElementById('agentGoal').value.trim();
   const { dataUrl } = await frameForAI();
   agentRunner.run(goal,
@@ -2308,6 +2359,26 @@ document.getElementById('btnAgentContinue').onclick = () => {
   if(!hfToken()) return setMsg('Save an HF token in Settings first.');
   agentRunner.continueRun(document.getElementById('agentGoal').value.trim())
     .catch(err => setMsg(err.message));
+};
+
+/* one-shot visual refinement: mini agent with only look_at_camera /
+   adjust_params / revert_params (js/agent/refine.js) */
+document.getElementById('btnRefineAI').onclick = () => {
+  if(!state.img) return setMsg('Load a camera image first.');
+  if(!hfToken()) return setMsg('Save an HF token in Settings first.');
+  if(params.lat === null) return setMsg('Place the camera first (step 2).');
+  if(!state.footprints.length && !state.roads.length && !state.landmarks.length)
+    return setMsg('Fetch OSM context first (section 6) — the AI aligns the projected wireframe.');
+  document.getElementById('agentLog').innerHTML = '';
+  resetParamSnapshots();
+  agentRunner = CalibExt.createRefineRunner(agentHost(), { onFinish: finalizeParamSnapshots });
+  const dataUrl = renderAnnotatedFrame();
+  agentRunner.run('',
+    'Refine this calibration visually. Current parameters: ' + JSON.stringify(agentGetState().params) +
+    (state.lastRMS != null ? ` · RMS ${state.lastRMS.toFixed(2)} px` : ' · no point pairs (judge alignment visually)') +
+    '\n\nThe annotated render at these parameters follows.',
+    [{ type: 'image', data: dataUrl.split(',')[1], mimeType: 'image/jpeg' }],
+  );
 };
 
 /* =====================================================================

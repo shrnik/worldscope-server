@@ -13,10 +13,12 @@ import * as mapillary from './api/mapillary.js';
 import * as agentTools from './agent/tools.js';
 import * as agentRunner from './agent/runner.js';
 import * as agentPrompts from './agent/system-prompt.js';
+import * as agentRefine from './agent/refine.js';
 
 window.CalibExt = {
   gradio, geocalib, sam3, overpass, wikipedia, vlm, elevation, mapillary,
-  agent: { ...agentTools, ...agentRunner, ...agentPrompts },
+  agent: { ...agentTools, ...agentRunner, ...agentPrompts, ...agentRefine },
   createAgentRunner: agentRunner.createAgentRunner,
+  createRefineRunner: agentRefine.createRefineRunner,
 };
 window.dispatchEvent(new Event('calib-ext-ready'));
