@@ -1428,8 +1428,13 @@ document.getElementById('btnGeoCalib').onclick = async () => {
    CALIBRATION  (OpenCV.js solvePnP when available, JS homography fallback)
    ===================================================================== */
 function solvePoseJS(obj, img, f, k1, k2){
-  /* seed: planar homography (ignores z) */
-  const H = homographyDLT(obj.map(p => [p[0], p[1]]), img);
+  /* seed: planar homography (ignores z). Celestial / far-elevated pairs
+     (z in the km range) would poison the plane fit and send the seed —
+     and everything refined from it — to a garbage minimum, so seed from
+     near-ground pairs only; the LM/solvePnP stage still uses all pairs. */
+  let idx = obj.map((_, i) => i).filter(i => Math.abs(obj[i][2]) < 100);
+  if(idx.length < 4) idx = obj.map((_, i) => i);
+  const H = homographyDLT(idx.map(i => [obj[i][0], obj[i][1]]), idx.map(i => img[i]));
   return poseFromHomography(H, f, f*params.aspect, params.cx, params.cy);
 }
 function solvePoseCV(obj, img, f, k1, k2, seed){
@@ -1521,7 +1526,9 @@ document.getElementById('btnCalibrate').onclick = () => {
     `<div>f ${f.toFixed(1)} px &middot; hfov ${(2*Math.atan(state.imgW/2/f)*R2D).toFixed(1)}&deg;</div>` +
     `<div>cam ${lat.toFixed(6)}, ${lon.toFixed(6)} @ ${height.toFixed(2)} m</div>` +
     `<div>yaw ${yaw.toFixed(1)}&deg; pitch ${pitch.toFixed(1)}&deg; roll ${roll.toFixed(2)}&deg;</div>` +
-    (good ? '' : '<div style="margin-top:4px">High error &mdash; check pairs for a mismatched click, spread points wider, or set per-point z heights.</div>');
+    (good ? '' : '<div style="margin-top:4px">High error &mdash; check pairs for a mismatched click, spread points wider, or set per-point z heights.' +
+      (params.k1 === 0 && params.k2 === 0 && !document.getElementById('optDist').checked
+        ? ' Distortion is 0 &mdash; wide-angle lenses need <b>Also solve distortion</b> (6+ pairs).' : '') + '</div>');
   setMsg('Calibration applied to the parameter panel.');
 };
 
