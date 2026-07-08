@@ -1,6 +1,6 @@
 /* pi-agent-core plumbing shared by the auto-calibrate agent and the
    visual-refine mini agent. The app is reached only through `host`. */
-import { AGENT_TOOLS, executeAgentTool, agentToolSummary } from './tools.js';
+import { CALIBRATE_TOOLS, executeAgentTool, agentToolSummary } from './tools.js';
 import { AGENT_SYSTEM } from './system-prompt.js';
 
 let piAgentModule = null;   // lazy-loaded on the first run
@@ -80,7 +80,7 @@ function wrapToolsForPi(host, tools){
 }
 
 export function createAgentRunner(host, {
-  tools = AGENT_TOOLS,
+  tools = CALIBRATE_TOOLS,
   systemPrompt = AGENT_SYSTEM,
   maxTurns = 40,
   keepImages = 2,
@@ -90,6 +90,7 @@ export function createAgentRunner(host, {
   let turns = 0;
   let goalSent = '';
   let stopped = false;
+  let finalText = '';       // last assistant message that ended a turn normally
 
   /* shared runner around prompt()/continue(): busy state, interrupt wiring,
      auto-resume on transient API errors, final status */
@@ -150,7 +151,10 @@ export function createAgentRunner(host, {
       if(event.type === 'message_end' && event.message.role === 'assistant'){
         const text = (event.message.content || [])
           .filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
-        if(text) host.agentLog(event.message.stopReason === 'stop' ? 'al-text al-final' : 'al-text', text);
+        if(text){
+          host.agentLog(event.message.stopReason === 'stop' ? 'al-text al-final' : 'al-text', text);
+          if(event.message.stopReason === 'stop') finalText = text;
+        }
       }
       if(event.type === 'turn_end' && ++turns >= maxTurns - 3){
         if(turns >= maxTurns) agent.abort();
@@ -163,12 +167,14 @@ export function createAgentRunner(host, {
 
   return {
     hasContext: () => !!agent?.state.messages.length,
+    finalText: () => finalText,
     abort(){ stopped = true; agent?.abort(); },
 
     /* fresh run: prompt text + optional image blocks alongside it */
     run(goal, promptText, blocks = []){
       agent = null;
       turns = 0;
+      finalText = '';
       goalSent = goal || '';
       return drive(async () => {
         await buildAgent();

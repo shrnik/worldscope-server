@@ -2258,6 +2258,47 @@ function finalizeParamSnapshots(){
   paramSnapshots = null;
 }
 
+/* refine_alignment tool: run the visual-refine sub-agent to completion and
+   hand its outcome back to the main agent. The sub-agent gets a muted host
+   (indented log lines, no button/status churn) so the main run's UI state
+   stays intact while it works. */
+let refineSubRunner = null;   // so the Stop button can abort a nested run
+function refineSubHost(){
+  return {
+    ...agentHost(),
+    agentLog: (cls, text) => agentLog(cls, '  ↳ ' + text),
+    agentButtons: () => {},
+    setMsg: () => {},
+  };
+}
+async function agentRefineAlignment(){
+  if(!state.img) throw new Error('no camera image loaded');
+  if(!state.footprints.length && !state.roads.length && !state.landmarks.length)
+    throw new Error('no OSM geometry loaded — call fetch_osm first');
+  const rmsBefore = state.lastRMS ?? null;
+  agentLog('al-tool', '⤷ refine_alignment: starting visual-refine sub-agent');
+  resetParamSnapshots();
+  const sub = CalibExt.createRefineRunner(refineSubHost(), { onFinish: finalizeParamSnapshots });
+  refineSubRunner = sub;
+  try{
+    const dataUrl = renderAnnotatedFrame();
+    await sub.run('',
+      'Refine this calibration visually. Current parameters: ' + JSON.stringify(agentGetState().params) +
+      (rmsBefore != null ? ` · RMS ${rmsBefore.toFixed(2)} px` : ' · no point pairs (judge alignment visually)') +
+      '\n\nThe annotated render at these parameters follows.',
+      [{ type: 'image', data: dataUrl.split(',')[1], mimeType: 'image/jpeg' }],
+    );
+  }finally{
+    refineSubRunner = null;
+  }
+  return {
+    rms_before: rmsBefore != null ? +rmsBefore.toFixed(2) : null,
+    rms_after: state.lastRMS != null ? +state.lastRMS.toFixed(2) : null,
+    params: agentGetState().params,
+    sub_agent_summary: sub.finalText() || '(sub-agent gave no summary)',
+  };
+}
+
 /* the single seam between the page and js/agent/: everything the tool
    executors and the runner need, as one object */
 function agentHost(){
@@ -2282,6 +2323,7 @@ function agentHost(){
     setParam: (key, value) => { paramInputs[key].set(value); onParamsChanged(); },
     adjustParams: agentAdjustParams,
     revertParams: agentRevertParams,
+    refineAlignment: agentRefineAlignment,
     solvePose,
     celestialPosition,
     addCelestialPair,
@@ -2309,7 +2351,10 @@ function agentButtons(running, hasContext){
 
 let agentRunner = null;   // survives interrupts so Continue can resume the run
 
-document.getElementById('btnAgentStop').onclick = () => { agentRunner?.abort(); };
+document.getElementById('btnAgentStop').onclick = () => {
+  refineSubRunner?.abort();
+  agentRunner?.abort();
+};
 
 document.getElementById('btnAgentRun').onclick = async () => {
   if(!state.img) return setMsg('Load a camera image first.');

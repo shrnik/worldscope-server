@@ -73,6 +73,9 @@ export const AGENT_TOOLS = [
   { name: 'revert_params',
     description: 'Restore the best-RMS parameter snapshot recorded during this refinement session (or the session-start parameters when no RMS is available). Use when adjustments made things worse.',
     input_schema: { type: 'object', properties: {}, additionalProperties: false } },
+  { name: 'refine_alignment',
+    description: 'Delegate visual fine-tuning to a specialized sub-agent: it watches the annotated render and nudges yaw/pitch/roll/focal/height in small clamped steps until the projected OSM wireframe visually hugs the image features, auto-reverting to its best state if changes hurt. Use AFTER solving (or after setting an approximate yaw) when the wireframe is visibly offset. Needs OSM data loaded. Returns the resulting parameters, RMS before/after, and the sub-agent\'s summary.',
+    input_schema: { type: 'object', properties: {}, additionalProperties: false } },
   { name: 'solve_pose',
     description: 'Solve the full camera pose from the current pairs (needs 4+; 6+ for distortion). Writes the solution to the parameters and returns RMS plus per-pair reprojection errors.',
     input_schema: { type: 'object', properties: {
@@ -95,8 +98,14 @@ export const AGENT_TOOLS = [
     }, required: ['body', 'timestamp_utc', 'u', 'v'], additionalProperties: false } },
 ];
 
+/* the auto-calibrate agent's toolset: everything except the low-level servo
+   primitives, which belong to the refine sub-agent (reached via
+   refine_alignment) so image-heavy servo loops stay out of the main run */
+export const CALIBRATE_TOOLS = AGENT_TOOLS.filter(t =>
+  !['adjust_params', 'revert_params'].includes(t.name));
+
 /* annotated render + params/RMS text — shared by look_at_camera and the
-   Phase-3 adjust_params feedback loop */
+   adjust_params feedback loop */
 export function annotatedViewBlocks(host, note = ''){
   if(!host.hasImage()) throw new Error('no camera image loaded');
   const dataUrl = host.renderAnnotatedFrame();
@@ -166,6 +175,8 @@ export async function executeAgentTool(host, name, input){
     }
     case 'revert_params':
       return host.revertParams();
+    case 'refine_alignment':
+      return await host.refineAlignment();
     case 'solve_pose':
       return host.solvePose({ solveFocal: !!input.solve_focal, solveDistortion: !!input.solve_distortion });
     case 'celestial_position':
@@ -189,6 +200,7 @@ export function agentToolSummary(name, out){
       case 'wikipedia_lookup':    return out.coordinates ? `@ ${out.coordinates.lat.toFixed(5)}, ${out.coordinates.lon.toFixed(5)}` : 'no coordinates';
       case 'set_camera_position': return `${out.camera.lat.toFixed(5)}, ${out.camera.lon.toFixed(5)}`;
       case 'revert_params':       return `${out.restored}${out.rms != null ? ` · RMS ${out.rms.toFixed(2)} px` : ''}`;
+      case 'refine_alignment':    return `RMS ${out.rms_before ?? 'n/a'} → ${out.rms_after ?? 'n/a'}`;
       case 'celestial_position':  return `az ${out.azimuth_deg}° el ${out.elevation_deg}°`;
       case 'add_celestial_pair':  return `az ${out.azimuth_deg}° el ${out.elevation_deg}° → #${out.pair_index + 1}`;
     }
