@@ -245,7 +245,7 @@ footer .grow{flex:1}
         <input class="small" type="number" id="datumN" step="0.1" placeholder="auto">
       </div>
       <table id="ptTable">
-        <thead><tr><th></th><th>px u,v</th><th>lat</th><th>lon</th><th>z</th><th>err</th><th></th></tr></thead>
+        <thead><tr><th></th><th>name</th><th>px u,v</th><th>lat</th><th>lon</th><th>z</th><th>err</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
       <button class="act" id="btnClearPairs">Clear all pairs</button>
@@ -294,7 +294,7 @@ footer .grow{flex:1}
   <details class="sec">
     <summary><span class="step">7</span>AI landmarks<span class="caret">&#9656;</span></summary>
     <div class="sec-body">
-      <p class="hint">A vision LLM (HF Inference Providers) spots fixed landmarks in the frame, SAM3 segments them to exact pixels, and Wikipedia supplies info &mdash; including coordinates, so a landmark can become a calibration pair in one click. Needs the HF token from Settings.</p>
+      <p class="hint">A vision LLM (HF Inference Providers) spots fixed landmarks in the frame, SAM3 segments them to exact pixels, and Wikipedia supplies info &mdash; including coordinates, so a landmark can become a calibration pair in one click. Small features are segmented twice automatically: a full-frame pass finds them, then a native-resolution crop around the match refines the pixels. Needs the HF token from Settings.</p>
       <div class="prow"><label>VLM model</label><input type="text" id="vlmModel" value="Qwen/Qwen2.5-VL-7B-Instruct" style="flex:1" spellcheck="false"></div>
       <div class="btnrow">
         <button class="act primary" id="btnDetectLm">Identify landmarks</button>
@@ -307,11 +307,12 @@ footer .grow{flex:1}
   <details class="sec">
     <summary><span class="step">8</span>Agent auto-calibrate<span class="caret">&#9656;</span></summary>
     <div class="sec-body">
-      <p class="hint">Claude runs the whole calibration autonomously: seeds with GeoCalib, looks at the frame, pulls OSM / Wikipedia / web-search coordinates, segments exact pixels with SAM3, adds pairs (incl. sun/moon if the capture time is known), solves, and visually verifies. Needs the Claude key from Settings; every detection appears live on the image.</p>
+      <p class="hint">An open VLM (HF Inference Providers) runs the whole calibration autonomously: seeds with GeoCalib, looks at the frame, pulls OSM / Wikipedia coordinates, segments exact pixels with SAM3, adds pairs (incl. sun/moon if the capture time is known), solves, and visually verifies. Needs the HF token from Settings; every detection appears live on the image.</p>
       <textarea id="agentGoal" rows="3" placeholder="Optional notes: camera location hints, capture time (for sun/moon), what it's looking at&hellip;" style="width:100%;resize:vertical;font-size:12px"></textarea>
       <div class="btnrow">
         <button class="act primary" id="btnAgentRun">Auto-calibrate</button>
-        <button class="act" id="btnAgentStop" disabled>Stop</button>
+        <button class="act" id="btnAgentStop" disabled>Interrupt</button>
+        <button class="act" id="btnAgentContinue" disabled>Continue</button>
       </div>
       <div class="agentlog" id="agentLog"></div>
     </div>
@@ -327,14 +328,8 @@ footer .grow{flex:1}
         <button class="act" id="btnClearToken">Clear</button>
       </div>
       <div class="kv"><span>Status</span><b id="tokenStatus">not set</b></div>
-      <p class="hint" style="margin-top:10px">Anthropic API key &mdash; powers the auto-calibrate agent (section 8). Same rules: browser-only, never exported.</p>
-      <div class="prow"><label>Claude key</label><input type="password" id="anthropicKeyInput" placeholder="sk-ant-..." autocomplete="off" style="flex:1"></div>
-      <div class="btnrow">
-        <button class="act primary" id="btnSaveAntKey">Save key</button>
-        <button class="act" id="btnClearAntKey">Clear</button>
-      </div>
-      <div class="kv"><span>Status</span><b id="antKeyStatus">not set</b></div>
-      <div class="prow"><label>Agent model</label><input type="text" id="agentModel" value="claude-opus-4-8" spellcheck="false" style="flex:1"></div>
+      <p class="hint" style="margin-top:10px">Auto-calibrate agent model (section 8) &mdash; any tool-calling vision model on HF Inference Providers, billed to the HF token above.</p>
+      <div class="prow"><label>Agent model</label><input type="text" id="agentModel" value="Qwen/Qwen3.6-27B:deepinfra" spellcheck="false" style="flex:1"></div>
     </div>
   </details>
 
@@ -554,6 +549,7 @@ const state = {
   selPair: -1,
   mode: 'idle',              // idle | origin | camera | pair-image | pair-map
   pendingPixel: null,        // [u,v] awaiting map click
+  pendingLabel: null,        // name to give the pair being placed, if known
   footprints: [],            // {ring:[[lat,lon]..], height, layer}
   roads: [],                 // {pts:[[lat,lon]..], layer}
   aiMarks: [],               // {name, u, v} — SAM3-segmented landmark pixels
@@ -830,12 +826,14 @@ function drawImage(){
   /* AI-detected landmark pixels (magenta rings, image space — no pose needed) */
   if(state.aiMarks.length){
     /* SAM3 masks first: translucent tinted overlays, scaled from the
-       downscaled AI frame up to full resolution */
+       AI frame (full downscale or zoom-region crop) back to full resolution */
     for(const m of state.aiMarks){
       if(!m.mask) continue;
+      const rect = m.maskRect || { x: 0, y: 0, w: state.imgW, h: state.imgH };
       ctx.save();
-      ctx.translate(viewT.tx, viewT.ty);
-      const s = viewT.s * (state.imgW / m.mask.width);
+      const [tx, ty] = toScreen(rect.x, rect.y);
+      ctx.translate(tx, ty);
+      const s = viewT.s * (rect.w / m.mask.width);
       ctx.scale(s, s);
       ctx.drawImage(m.mask, 0, 0);
       ctx.restore();
@@ -934,6 +932,7 @@ canvas.addEventListener('pointerup', ev => {
     const [ix, iy] = toImage(ev.offsetX, ev.offsetY);
     if(ix < 0 || iy < 0 || ix > state.imgW || iy > state.imgH) return;
     state.pendingPixel = [ix, iy];
+    state.pendingLabel = null;   // manual click — any queued landmark name no longer applies
     setMode('pair-map');
     drawImage();
   }
@@ -1058,8 +1057,9 @@ map.on('click', ev => {
     setMsg('Camera placed. Adjust height / yaw / pitch in step 4, or just add pairs and solve.');
   } else if(state.mode === 'pair-map' && state.pendingPixel){
     const snap = snapLatLng(ev.latlng);
-    addPair(state.pendingPixel[0], state.pendingPixel[1], snap ? snap.lat : lat, snap ? snap.lon : lng);
-    state.pendingPixel = null;
+    addPair(state.pendingPixel[0], state.pendingPixel[1], snap ? snap.lat : lat, snap ? snap.lon : lng,
+      state.pendingLabel || snap?.label);
+    state.pendingPixel = null; state.pendingLabel = null;
     setMode('pair-image');
     if(snap) setMsg(`Pair snapped to OSM ${snap.label} \u2014 exact coordinates.`);
   }
@@ -1090,26 +1090,27 @@ function setMode(m){
 document.getElementById('btnSetOrigin').onclick = () => setMode(state.mode === 'origin' ? 'idle' : 'origin');
 document.getElementById('btnSetCamera').onclick = () => setMode(state.mode === 'camera' ? 'idle' : 'camera');
 document.getElementById('btnAddPairs').onclick = () => {
-  if(state.mode === 'pair-image' || state.mode === 'pair-map'){ state.pendingPixel=null; setMode('idle'); setMsg('Paused.'); return; }
+  if(state.mode === 'pair-image' || state.mode === 'pair-map'){ state.pendingPixel=null; state.pendingLabel=null; setMode('idle'); setMsg('Paused.'); return; }
   if(!state.img) return setMsg('Load a camera image first (step 1).');
   if(!state.origin) return setMsg('Set the origin first (step 2).');
   setMode('pair-image');
 };
 window.addEventListener('keydown', e => {
-  if(e.key === 'Escape'){ state.pendingPixel = null; setMode('idle'); setMsg('Ready.'); }
+  if(e.key === 'Escape'){ state.pendingPixel = null; state.pendingLabel = null; setMode('idle'); setMsg('Ready.'); }
 });
 
 /* =====================================================================
    POINT PAIRS
    ===================================================================== */
-function addPair(u, v, lat, lon){
+function addPair(u, v, lat, lon, label){
   const i = state.pairs.length;
   const mk = L.marker([lat,lon], {
     draggable: true,
     icon: L.divIcon({ className:'pair-flag', iconSize:[18,18], iconAnchor:[3,16],
       html:`<div class="pin" style="background:${pairColor(i)}"><span>${i+1}</span></div>` }),
   }).addTo(map);
-  const p = { u, v, lat, lon, z: 0, marker: mk };
+  const p = { u, v, lat, lon, z: 0, label: (label || '').trim() || `Point ${i+1}`, marker: mk };
+  mk.bindTooltip(p.label, { direction: 'top', offset: [0, -10] });
   mk.on('drag', e => {
     const ll = e.target.getLatLng();
     p.lat = ll.lat; p.lon = ll.lng;
@@ -1142,6 +1143,7 @@ function refreshTable(){
     if(i === state.selPair) tr.className = 'sel';
     tr.innerHTML =
       `<td><span class="idx" style="background:${pairColor(i)}">${i+1}</span></td>` +
+      `<td><input data-k="label" type="text" value="${escHtml(p.label || '')}" style="width:56px"></td>` +
       `<td>${p.u.toFixed(0)},${p.v.toFixed(0)}</td>` +
       `<td><input data-k="lat" step="0.000001" type="number" value="${p.lat.toFixed(6)}"></td>` +
       `<td><input data-k="lon" step="0.000001" type="number" value="${p.lon.toFixed(6)}"></td>` +
@@ -1151,6 +1153,12 @@ function refreshTable(){
     tr.addEventListener('click', e => { if(e.target.tagName !== 'INPUT' && !e.target.classList.contains('del')) selectPair(i); });
     tr.querySelector('.del').onclick = () => removePair(i);
     tr.querySelectorAll('input').forEach(inp => inp.addEventListener('change', () => {
+      if(inp.dataset.k === 'label'){
+        p.label = inp.value.trim() || `Point ${i+1}`;
+        p.marker.bindTooltip(p.label);
+        scheduleAutosave();
+        return;
+      }
       const v = parseFloat(inp.value);
       if(isNaN(v)) return;
       p[inp.dataset.k] = v;
@@ -1189,6 +1197,7 @@ function parseCSVPoints(text){
   const ilo = col('maplng','maplon','lng','lon','longitude');
   const ial = col('mapaltitude','altitude','alt','elevation','elev');
   const iz  = col('z','zheight','heightaboveground');
+  const iid = col('name','label','pointname','id');
   if(iu<0 || iv<0 || ila<0 || ilo<0)
     throw new Error('Missing columns \u2014 need img_x, img_y, map_lat, map_lng. Got: ' + lines[0]);
   const rows = [];
@@ -1198,6 +1207,7 @@ function parseCSVPoints(text){
     const la = parseFloat(c[ila]), lo = parseFloat(c[ilo]);
     if([u,v,la,lo].some(isNaN)) continue;
     rows.push({ u, v, la, lo,
+      name: iid >= 0 ? String(c[iid] ?? '').trim() : '',
       alt: ial >= 0 ? parseFloat(c[ial]) : NaN,
       z:   iz  >= 0 ? parseFloat(c[iz])  : NaN });
   }
@@ -1220,7 +1230,7 @@ function importCSVText(text){
     setOrigin(cla, clo);
   }
   for(const r of rows){
-    addPair(r.u, r.v, r.la, r.lo);
+    addPair(r.u, r.v, r.la, r.lo, r.name);
     const p = state.pairs[state.pairs.length-1];
     p.alt = isFinite(r.alt) ? r.alt : undefined;
     if(isFinite(r.z))        p.z = r.z;
@@ -1251,9 +1261,12 @@ datumInput.addEventListener('change', () => {
 document.getElementById('btnExportCSV').onclick = () => {
   if(!state.pairs.length) return setMsg('No point pairs to export.');
   const hasDatum = isFinite(state.datum);
-  const head = 'id,img_x,img_y,map_lat,map_lng,' + (hasDatum ? 'map_altitude' : 'z');
+  const head = 'id,name,img_x,img_y,map_lat,map_lng,' + (hasDatum ? 'map_altitude' : 'z');
+  /* the importer splits on bare delimiters, so keep names delimiter-free
+     instead of quoting them */
   const rows = state.pairs.map((p, i) =>
-    [i+1, p.u.toFixed(2), p.v.toFixed(2), p.lat.toFixed(8), p.lon.toFixed(8),
+    [i+1, (p.label || '').replace(/[,;"\n]/g, ' ').trim(),
+     p.u.toFixed(2), p.v.toFixed(2), p.lat.toFixed(8), p.lon.toFixed(8),
      (hasDatum ? (state.datum + p.z) : p.z).toFixed(3)].join(','));
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob([head + '\n' + rows.join('\n')], { type:'text/csv' }));
@@ -1321,7 +1334,9 @@ async function geoCalibPredict(blob){
     if(line.startsWith('event:')) event = line.slice(6).trim();
     else if(line.startsWith('data:') && (event === 'complete' || event === 'error')){
       const payload = JSON.parse(line.slice(5));
-      if(event === 'error') throw new Error('Space reported an error: ' + JSON.stringify(payload));
+      if(event === 'error') throw new Error(payload === null
+        ? 'Space rejected the call with no detail — usually ZeroGPU denying quota; save a valid HF token in Settings.'
+        : 'Space reported an error: ' + JSON.stringify(payload));
       return payload;
     }
   }
@@ -1527,11 +1542,10 @@ function addCelestialPair(body, timestampUtc, u, v){
   const n = cn + D * Math.cos(az) * Math.cos(el);
   const z = (params.height || 0) + D * Math.sin(el);
   const [lat, lon] = enuToLL(e, n, state.origin);
-  addPair(u, v, lat, lon);
+  addPair(u, v, lat, lon, `${body} @ ${timestampUtc}`);
   const p = state.pairs.at(-1);
   p.z = z;
   p.celestial = body;
-  p.label = `${body} @ ${timestampUtc}`;
   updateResiduals(); refreshTable(); drawImage();
   return { ...cp, pair_index: state.pairs.length - 1 };
 }
@@ -1584,8 +1598,9 @@ function addLandmark(label, lat, lon){
     /* clicking a landmark while placing a pair uses its exact coordinates */
     if(state.mode === 'pair-map' && state.pendingPixel){
       L.DomEvent.stop(e);
-      addPair(state.pendingPixel[0], state.pendingPixel[1], lat, lon);
-      state.pendingPixel = null;
+      addPair(state.pendingPixel[0], state.pendingPixel[1], lat, lon,
+        state.pendingLabel || label.replace(/_/g, ' '));
+      state.pendingPixel = null; state.pendingLabel = null;
       setMode('pair-image');
       setMsg(`Pair anchored to OSM ${label.replace(/_/g,' ')} \u2014 exact coordinates.`);
     }
@@ -1729,7 +1744,34 @@ function computeImageKey(){
   for(let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
   return `ground-camera-calibrator.autosave.${state.imgW}x${state.imgH}.${h.toString(36)}`;
 }
-function snapshotProgress(){
+/* SAM3 detections round-trip: masks are canvases, serialized as PNG data URLs */
+function serializeAiMarks(){
+  return state.aiMarks.map(m => ({
+    name: m.name, u: m.u, v: m.v,
+    maskRect: m.maskRect || null,
+    mask: m.mask ? m.mask.toDataURL('image/png') : null,
+  }));
+}
+function restoreAiMarks(list){
+  state.aiMarks = [];
+  for(const s of list || []){
+    const mark = { name: s.name, u: s.u, v: s.v, maskRect: s.maskRect || null, mask: null };
+    if(s.mask){
+      const im = new Image();
+      im.onload = () => {
+        const c = document.createElement('canvas');
+        c.width = im.naturalWidth; c.height = im.naturalHeight;
+        c.getContext('2d').drawImage(im, 0, 0);
+        mark.mask = c;
+        drawImage();
+      };
+      im.src = s.mask;
+    }
+    state.aiMarks.push(mark);
+  }
+  drawImage();
+}
+function snapshotProgress(includeMasks = true){
   return {
     savedAt: new Date().toISOString(),
     params: { ...params },
@@ -1737,6 +1779,8 @@ function snapshotProgress(){
     datum: state.datum,
     osmRadius: +radN.value,
     pairs: state.pairs.map(p => ({ u: p.u, v: p.v, lat: p.lat, lon: p.lon, z: p.z, label: p.label, celestial: p.celestial })),
+    aiMarks: includeMasks ? serializeAiMarks()
+      : serializeAiMarks().map(m => ({ ...m, mask: null })),
   };
 }
 function scheduleAutosave(){
@@ -1744,7 +1788,11 @@ function scheduleAutosave(){
   clearTimeout(autosaveTimer);
   autosaveTimer = setTimeout(() => {
     try{ localStorage.setItem(autosaveKey, JSON.stringify(snapshotProgress())); }
-    catch(e){ console.warn('autosave failed:', e); }
+    catch(e){
+      /* mask PNGs can blow the localStorage quota — save everything else */
+      try{ localStorage.setItem(autosaveKey, JSON.stringify(snapshotProgress(false))); }
+      catch(e2){ console.warn('autosave failed:', e2); }
+    }
   }, 800);
 }
 function restoreProgress(snap){
@@ -1757,12 +1805,12 @@ function restoreProgress(snap){
     if(isFinite(snap.datum)){ state.datum = snap.datum; datumInput.value = snap.datum.toFixed(1); }
     if(snap.osmRadius){ radN.value = snap.osmRadius; radR.value = snap.osmRadius; }
     for(const p of snap.pairs || []){
-      addPair(p.u, p.v, p.lat, p.lon);
+      addPair(p.u, p.v, p.lat, p.lon, p.label);
       const q = state.pairs.at(-1);
       q.z = p.z || 0;
-      if(p.label){ q.label = p.label; q.marker.bindTooltip(p.label); }
       if(p.celestial) q.celestial = p.celestial;
     }
+    restoreAiMarks(snap.aiMarks);
     syncParamUI(); onParamsChanged(); refreshTable();
     if(snap.origin) map.setView([snap.origin.lat, snap.origin.lon], 17);
   }finally{
@@ -1782,9 +1830,10 @@ document.getElementById('btnExport').onclick = () => {
     imageData = c.toDataURL('image/jpeg', 0.9);
   }
   const proj = {
-    app: 'ground-camera-calibrator', version: 1,
+    app: 'ground-camera-calibrator', version: 2,
     params: { ...params }, origin: state.origin,
-    pairs: state.pairs.map(p => ({ u:p.u, v:p.v, lat:p.lat, lon:p.lon, z:p.z, alt:p.alt })),
+    pairs: state.pairs.map(p => ({ u:p.u, v:p.v, lat:p.lat, lon:p.lon, z:p.z, alt:p.alt, label:p.label, celestial:p.celestial })),
+    aiMarks: serializeAiMarks(),
     datum: state.datum,
     osmRadius: +radN.value, image: imageData,
   };
@@ -1808,7 +1857,15 @@ document.getElementById('importFile').onchange = e => {
       if(proj.origin) setOrigin(proj.origin.lat, proj.origin.lon);
       if(proj.osmRadius){ radN.value = proj.osmRadius; radR.value = proj.osmRadius; }
       if(isFinite(proj.datum)){ state.datum = proj.datum; datumInput.value = proj.datum.toFixed(1); }
-      const restorePairs = () => (proj.pairs || []).forEach(p => { addPair(p.u, p.v, p.lat, p.lon); const q = state.pairs.at(-1); q.z = p.z || 0; q.alt = p.alt; });
+      const restorePairs = () => {
+        (proj.pairs || []).forEach(p => {
+          addPair(p.u, p.v, p.lat, p.lon, p.label);
+          const q = state.pairs.at(-1);
+          q.z = p.z || 0; q.alt = p.alt;
+          if(p.celestial) q.celestial = p.celestial;
+        });
+        restoreAiMarks(proj.aiMarks);
+      };
       if(proj.image){
         const im = new Image();
         im.onload = () => {
@@ -1831,7 +1888,7 @@ document.getElementById('importFile').onchange = e => {
 /* =====================================================================
    AI LANDMARKS  (VLM via HF Inference Providers -> SAM3 Space -> Wikipedia)
    ===================================================================== */
-const SAM3_URL = 'https://prithivmlmods-sam3-demo.hf.space';
+const SAM3_URL = 'https://shrnik-sam3-demo.hf.space';
 const VLM_KEY = 'ground-camera-calibrator.vlmModel';
 const vlmModelInput = document.getElementById('vlmModel');
 vlmModelInput.value = localStorage.getItem(VLM_KEY) || vlmModelInput.value;
@@ -1839,16 +1896,21 @@ vlmModelInput.onchange = () => localStorage.setItem(VLM_KEY, vlmModelInput.value
 
 const escHtml = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
-/* downscaled copy of the loaded frame; scale maps its px back to full-res px */
-function frameForAI(maxW = 1024){
+/* downscaled copy of the loaded frame (or of the zoom-region crop, at native
+   resolution when it fits in maxW); full-res px = crop px * scale + (ox, oy) */
+function frameForAI(maxW = 1024, region = null){
   return new Promise(resolve => {
-    const s = Math.min(1, maxW / state.imgW);
+    const rx = region ? Math.round(region.x) : 0;
+    const ry = region ? Math.round(region.y) : 0;
+    const rw = region ? Math.max(1, Math.round(region.w)) : state.imgW;
+    const rh = region ? Math.max(1, Math.round(region.h)) : state.imgH;
+    const s = Math.min(1, maxW / rw);
     const c = document.createElement('canvas');
-    c.width = Math.round(state.imgW * s);
-    c.height = Math.round(state.imgH * s);
-    c.getContext('2d').drawImage(state.img, 0, 0, c.width, c.height);
+    c.width = Math.round(rw * s);
+    c.height = Math.round(rh * s);
+    c.getContext('2d').drawImage(state.img, rx, ry, rw, rh, 0, 0, c.width, c.height);
     const dataUrl = c.toDataURL('image/jpeg', 0.85);
-    c.toBlob(blob => resolve({ blob, dataUrl, scale: 1/s }), 'image/jpeg', 0.85);
+    c.toBlob(blob => resolve({ blob, dataUrl, scale: 1/s, ox: rx, oy: ry, rw, rh }), 'image/jpeg', 0.85);
   });
 }
 
@@ -1859,7 +1921,9 @@ function parseGradioSSE(text){
     if(line.startsWith('event:')) event = line.slice(6).trim();
     else if(line.startsWith('data:') && (event === 'complete' || event === 'error')){
       const payload = JSON.parse(line.slice(5));
-      if(event === 'error') throw new Error('Space reported an error: ' + JSON.stringify(payload));
+      if(event === 'error') throw new Error(payload === null
+        ? 'Space rejected the call with no detail — usually ZeroGPU denying quota; save a valid HF token in Settings.'
+        : 'Space reported an error: ' + JSON.stringify(payload));
       return payload;
     }
   }
@@ -1933,6 +1997,7 @@ document.getElementById('btnClearAiLm').onclick = () => {
   state.aiMarks = [];
   document.getElementById('aiLmList').innerHTML = '';
   drawImage();
+  scheduleAutosave();
 };
 
 /* load a SAM3 mask image: centroid of its non-empty pixels + a magenta-tinted
@@ -1952,52 +2017,98 @@ function loadMask(url){
       const tint = g.createImageData(w, h);
       const t = tint.data;
       let sx = 0, sy = 0, n = 0;
+      let bx0 = w, by0 = h, bx1 = 0, by1 = 0;
       for(let y = 0; y < h; y++) for(let x = 0; x < w; x++){
         const i = (y*w + x) * 4;
         if(d[i+3] > 127 && (d[i] + d[i+1] + d[i+2]) > 30){
           sx += x; sy += y; n++;
+          if(x < bx0) bx0 = x; if(x > bx1) bx1 = x;
+          if(y < by0) by0 = y; if(y > by1) by1 = y;
           t[i] = 214; t[i+1] = 51; t[i+2] = 108; t[i+3] = 110;   // translucent #d6336c
         }
       }
       if(!n) return reject(new Error('empty mask'));
       g.putImageData(tint, 0, 0);
-      resolve({ cx: sx/n, cy: sy/n, canvas: c });
+      resolve({ cx: sx/n, cy: sy/n, bx0, by0, bx1, by1, canvas: c });
     };
     im.onerror = () => reject(new Error('mask image load failed'));
     im.src = url;
   });
 }
 
-/* text query -> SAM3 Space -> {u, v, instances} in full-res pixels; stores the
-   mask + labeled centroid in state.aiMarks so it renders on the camera image */
-async function sam3Segment(query){
-  if(!state.img) throw new Error('no camera image loaded');
-  const { blob, scale } = await frameForAI();
+/* one SAM3 Space call on a crop of the frame (whole frame when region is null);
+   returns the mask + the full-res rect it covers */
+async function sam3Call(query, region){
+  const { blob, ox, oy, rw, rh } = await frameForAI(1024, region);
+  /* the Space runs on ZeroGPU: anonymous API calls are rejected by the GPU
+     scheduler (SSE answers "event: error, data: null") — authenticate with
+     the HF token so the call gets quota */
+  const auth = hfToken() ? { Authorization: 'Bearer ' + hfToken() } : {};
   const fd = new FormData();
   fd.append('files', blob, 'frame.jpg');
-  const up = await fetch(`${SAM3_URL}/gradio_api/upload`, { method: 'POST', body: fd });
+  const up = await fetch(`${SAM3_URL}/gradio_api/upload`, { method: 'POST', headers: auth, body: fd });
   if(!up.ok) throw new Error('upload HTTP ' + up.status);
   const [path] = await up.json();
-  const call = await fetch(`${SAM3_URL}/gradio_api/call/run_image_segmentation`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ data: [ { path, meta: { _type: 'gradio.FileData' } }, query, 0.45 ] }),
-  });
-  if(!call.ok) throw new Error('call HTTP ' + call.status);
-  const { event_id } = await call.json();
-  const txt = await (await fetch(`${SAM3_URL}/gradio_api/call/run_image_segmentation/${event_id}`)).text();
-  const payload = parseGradioSSE(txt);
+  const runOnce = async () => {
+    const call = await fetch(`${SAM3_URL}/gradio_api/call/run_image_segmentation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...auth },
+      body: JSON.stringify({ data: [ { path, meta: { _type: 'gradio.FileData' } }, query, 0.45 ] }),
+    });
+    if(!call.ok) throw new Error('call HTTP ' + call.status);
+    const { event_id } = await call.json();
+    const txt = await (await fetch(`${SAM3_URL}/gradio_api/call/run_image_segmentation/${event_id}`, { headers: auth })).text();
+    return parseGradioSSE(txt);
+  };
+  let payload;
+  try{ payload = await runOnce(); }
+  catch(err){
+    /* the SSE stream sometimes ends empty (Space waking up / idle connection
+       cut); the event result is gone once read, so re-run the call once */
+    if(!/stream ended without a result/.test(err.message)) throw err;
+    payload = await runOnce();
+  }
   /* AnnotatedImage payload: {image, annotations:[{image:FileData, label}]}; tolerate tuples */
   const ann = payload?.[0]?.annotations || [];
   if(!ann.length) throw new Error(`SAM3 found no match for "${query}"`);
   const maskUrl = ann[0]?.image?.url || ann[0]?.[0]?.url || ann[0]?.url;
   if(!maskUrl) throw new Error('unexpected mask payload shape');
   const mask = await loadMask(maskUrl);
-  const u = mask.cx * scale, v = mask.cy * scale;
+  return { mask, rect: { x: ox, y: oy, w: rw, h: rh }, instances: ann.length };
+}
+
+/* text query -> SAM3 -> {u, v, instances} in full-res pixels; stores the mask +
+   labeled centroid in state.aiMarks so it renders on the camera image.
+   Zoom is agentic: `region` (full-res px rect) crops the frame before SAM3 —
+   and when no region is given but the full-frame pass lands on a small object
+   in a downscaled frame, a second pass re-segments a native-resolution crop
+   around the first match so small features get exact pixels. */
+async function sam3Segment(query, region = null){
+  if(!state.img) throw new Error('no camera image loaded');
+  let res = await sam3Call(query, region);
+  let zoomed = false;
+  const kx = res.rect.w / res.mask.canvas.width, ky = res.rect.h / res.mask.canvas.height;
+  const bw = (res.mask.bx1 - res.mask.bx0 + 1) * kx;
+  const bh = (res.mask.by1 - res.mask.by0 + 1) * ky;
+  if(!region && res.rect.w > 1024 && bw < state.imgW * 0.35 && bh < state.imgH * 0.35){
+    const pad = Math.max(32, bw * 0.4, bh * 0.4);
+    const x0 = Math.max(0, res.rect.x + res.mask.bx0 * kx - pad);
+    const y0 = Math.max(0, res.rect.y + res.mask.by0 * ky - pad);
+    const x1 = Math.min(state.imgW, res.rect.x + (res.mask.bx1 + 1) * kx + pad);
+    const y1 = Math.min(state.imgH, res.rect.y + (res.mask.by1 + 1) * ky + pad);
+    try{
+      res = await sam3Call(query, { x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+      zoomed = true;
+    }catch(e){ /* keep the full-frame result if the zoomed pass finds nothing */ }
+  }
+  const { mask, rect } = res;
+  const u = rect.x + mask.cx * (rect.w / mask.canvas.width);
+  const v = rect.y + mask.cy * (rect.h / mask.canvas.height);
   state.aiMarks = state.aiMarks.filter(a => a.name !== query);
-  state.aiMarks.push({ name: query, u, v, mask: mask.canvas });
+  state.aiMarks.push({ name: query, u, v, mask: mask.canvas, maskRect: rect });
   drawImage();
-  return { u: +u.toFixed(1), v: +v.toFixed(1), instances: ann.length };
+  scheduleAutosave();
+  return { u: +u.toFixed(1), v: +v.toFixed(1), instances: res.instances, zoomed };
 }
 
 async function segmentLandmark(it, out, btn){
@@ -2010,10 +2121,11 @@ async function segmentLandmark(it, out, btn){
     const { u, v } = res;
     /* rename the stored mark from the raw query to the landmark's name */
     const mark = state.aiMarks.find(a => a.name === query);
-    if(mark) mark.name = it.name;
+    if(mark){ mark.name = it.name; scheduleAutosave(); }
     out.innerHTML = `pixel (${u.toFixed(0)}, ${v.toFixed(0)}), ${res.instances} instance(s) <button class="act">Use as pair</button>`;
     out.querySelector('button').onclick = () => {
       state.pendingPixel = [u, v];
+      state.pendingLabel = it.name;
       setMode('pair-map');
       setMsg(`Now click "${it.name}" on the map (snaps to OSM points).`);
     };
@@ -2056,7 +2168,7 @@ async function lookupLandmark(it, out, btn){
       b.textContent = (mark ? 'Add pair @ ' : 'Pan map to ') + lat.toFixed(5) + ', ' + lon.toFixed(5);
       b.onclick = () => {
         if(mark && state.origin){
-          addPair(mark.u, mark.v, lat, lon);
+          addPair(mark.u, mark.v, lat, lon, it.name);
           setMsg(`Pair added: ${it.name} @ Wikipedia coordinates.`);
         } else if(mark){
           setMsg('Set the origin first (section 2), then add the pair.');
@@ -2077,11 +2189,30 @@ async function lookupLandmark(it, out, btn){
 }
 
 /* =====================================================================
-   AGENT AUTO-CALIBRATE  (Claude tool-use loop, called directly from the
-   browser — BYO key via the anthropic-dangerous-direct-browser-access CORS
-   header. Claude is the VLM: it sees the frame and the annotated render.)
+   AGENT AUTO-CALIBRATE  (pi-agent-core drives the tool loop; the model
+   runs on HF Inference Providers via pi-ai's huggingface provider, same
+   token as the rest of the app. The agent model is the VLM: it sees the
+   frame and the annotated render.)
    ===================================================================== */
-const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+let piAgentModule = null;   // lazy-loaded on the first run
+function loadPiAgent(){
+  return piAgentModule ??= import('https://esm.sh/@earendil-works/pi-agent-core@0.80.3?bundle');
+}
+
+/* pi-ai Model record for an arbitrary HF router model id */
+function agentModelFor(id){
+  return {
+    id, name: id,
+    api: 'openai-completions',
+    provider: 'huggingface',
+    baseUrl: 'https://router.huggingface.co/v1',
+    reasoning: false,
+    input: ['text', 'image'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+    maxTokens: 8192,
+  };
+}
 
 /* compact state snapshot for the agent */
 function agentGetState(){
@@ -2180,7 +2311,6 @@ function renderAnnotatedFrame(maxW = 1024){
 }
 
 const AGENT_TOOLS = [
-  { type: 'web_search_20260209', name: 'web_search', max_uses: 8 },
   { name: 'get_state',
     description: 'Current calibration state: image size, origin, camera GPS, parameters, all pairs with reprojection errors, overall RMS, and loaded OSM data counts.',
     input_schema: { type: 'object', properties: {}, additionalProperties: false } },
@@ -2193,9 +2323,14 @@ const AGENT_TOOLS = [
       radius_m: { type: 'number', description: 'Fetch radius in meters (50-600)', minimum: 50, maximum: 600 },
     }, required: ['radius_m'], additionalProperties: false } },
   { name: 'segment_object',
-    description: 'SAM3 text-prompted segmentation on the camera frame. Give a short noun phrase ("red brick clock tower", "leftmost street lamp"); returns the exact full-resolution pixel centroid of the best match and draws its mask on the image. Note: the centroid is the mask center of mass — for a building prefer pairing a corner or its base.',
+    description: 'SAM3 text-prompted segmentation on the camera frame. Give a short noun phrase ("red brick clock tower", "leftmost street lamp"); returns the exact full-resolution pixel centroid of the best match and draws its mask on the image. Small matches are automatically re-segmented on a native-resolution crop for precise pixels (zoomed: true in the result). For tiny or distant features SAM3 misses on the full frame, pass `region` — a full-res pixel rect around where you believe the feature is (from look_at_camera) — and only that crop is sent, at native resolution. Note: the centroid is the mask center of mass — for a building prefer pairing a corner or its base.',
     input_schema: { type: 'object', properties: {
       query: { type: 'string', description: '2-5 word noun phrase locating one object' },
+      region: { type: 'object', description: 'Optional crop to segment within, in full-resolution frame pixels. Pad generously (2-3x the feature size).',
+        properties: {
+          x: { type: 'number' }, y: { type: 'number' },
+          w: { type: 'number' }, h: { type: 'number' },
+        }, required: ['x', 'y', 'w', 'h'], additionalProperties: false },
     }, required: ['query'], additionalProperties: false } },
   { name: 'wikipedia_lookup',
     description: 'Look up a named landmark on Wikipedia. Returns title, summary, URL, and — for geographic subjects — exact coordinates usable as the world side of a pair.',
@@ -2205,6 +2340,12 @@ const AGENT_TOOLS = [
   { name: 'geocalib_seed',
     description: 'Run the GeoCalib neural network on the frame to estimate focal length, k1 distortion, pitch, and roll from image cues alone; applies them to the parameters. Good first step. Does NOT estimate yaw or position. May take a minute on a cold start.',
     input_schema: { type: 'object', properties: {}, additionalProperties: false } },
+  { name: 'set_camera_position',
+    description: 'Set the camera GPS position (and the local origin, if not set yet). Use once you have determined where the camera is — from operator notes, scene recognition, Wikipedia, or web search. Required before fetch_osm and add_pair can work when the user left position empty.',
+    input_schema: { type: 'object', properties: {
+      lat: { type: 'number' }, lon: { type: 'number' },
+      height_m: { type: 'number', description: 'Camera height above local ground in meters, if known (e.g. rooftop mount)' },
+    }, required: ['lat', 'lon'], additionalProperties: false } },
   { name: 'add_pair',
     description: 'Add an image<->world correspondence: pixel (u,v) in the full-resolution frame paired with a world coordinate (lat, lon, optional height above local ground in meters).',
     input_schema: { type: 'object', properties: {
@@ -2245,6 +2386,34 @@ const AGENT_TOOLS = [
       v: { type: 'number', description: 'Pixel y of the body center' },
     }, required: ['body', 'timestamp_utc', 'u', 'v'], additionalProperties: false } },
 ];
+/* same tools as pi AgentTool records: executeAgentTool does the work, the
+   wrapper adapts results (pi tool results carry text and image blocks) and
+   feeds the live log */
+function piAgentTools(){
+  return AGENT_TOOLS.map(t => ({
+    name: t.name,
+    label: t.name,
+    description: t.description,
+    parameters: t.input_schema,
+    execute: async (toolCallId, params) => {
+      const argStr = JSON.stringify(params ?? {});
+      try{
+        const out = await executeAgentTool(t.name, params ?? {});
+        const digest = agentToolSummary(t.name, out);
+        agentLog('al-tool', `→ ${t.name} ${argStr.length > 90 ? argStr.slice(0, 90) + '…' : argStr} ✓${digest ? ' — ' + digest : ''}`);
+        return { content: Array.isArray(out) ? out
+          : [{ type: 'text', text: typeof out === 'string' ? out : JSON.stringify(out) }] };
+      }catch(err){
+        /* never throw: a failed tool becomes a normal text result, so the run
+           keeps going and the model can retry or route around it */
+        const reason = err?.message || String(err);
+        agentLog('al-tool err', `→ ${t.name} ✗ ${reason}`);
+        return { content: [{ type: 'text', text:
+          `${t.name} failed: ${reason}. This is not fatal — adjust the arguments (different query, region, or values) or continue with another approach.` }] };
+      }
+    },
+  }));
+}
 
 async function executeAgentTool(name, input){
   switch(name){
@@ -2255,7 +2424,7 @@ async function executeAgentTool(name, input){
       const dataUrl = renderAnnotatedFrame();
       const rms = state.lastRMS;
       return [
-        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: dataUrl.split(',')[1] } },
+        { type: 'image', data: dataUrl.split(',')[1], mimeType: 'image/jpeg' },
         { type: 'text', text: `Annotated render at current parameters. RMS: ${rms != null ? rms.toFixed(2) + ' px' : 'n/a (not solved yet)'}. Pixel coordinates you give in other tools must be in the full ${state.imgW}x${state.imgH} frame (this render is scaled by ${(Math.min(1, 1024/state.imgW)).toFixed(4)}).` },
       ];
     }
@@ -2269,18 +2438,32 @@ async function executeAgentTool(name, input){
       return { counts: res, landmarks, buildings,
         note: 'corner/landmark coordinates are exact — prefer them as the world side of pairs' };
     }
-    case 'segment_object':
-      return await sam3Segment(input.query);
+    case 'segment_object': {
+      let region = null;
+      if(input.region){
+        const cl = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+        const x = cl(input.region.x, 0, state.imgW - 1), y = cl(input.region.y, 0, state.imgH - 1);
+        region = { x, y, w: cl(input.region.w, 16, state.imgW - x), h: cl(input.region.h, 16, state.imgH - y) };
+      }
+      return await sam3Segment(input.query, region);
+    }
     case 'wikipedia_lookup':
       return await wikiLookup(input.name);
     case 'geocalib_seed':
       return await geoCalibSeed();
+    case 'set_camera_position': {
+      if(!state.origin) setOrigin(input.lat, input.lon);
+      params.lat = input.lat; params.lon = input.lon;
+      if(typeof input.height_m === 'number') params.height = input.height_m;
+      syncParamUI(); placeCameraMarker(); onParamsChanged(); refreshTable();
+      map.setView([input.lat, input.lon], 17);
+      return { camera: { lat: params.lat, lon: params.lon, height_m: params.height }, origin: state.origin };
+    }
     case 'add_pair': {
-      if(!state.origin) throw new Error('origin is not set');
-      addPair(input.u, input.v, input.lat, input.lon);
+      if(!state.origin) throw new Error('origin is not set — call set_camera_position first');
+      addPair(input.u, input.v, input.lat, input.lon, input.label);
       const p = state.pairs.at(-1);
-      if(input.z_m) p.z = input.z_m;
-      if(input.label){ p.label = input.label; p.marker.bindTooltip(input.label); }
+      if(typeof input.z_m === 'number') p.z = input.z_m;
       updateResiduals(); refreshTable(); drawImage();
       return { pair_index: state.pairs.length - 1, pair_count: state.pairs.length };
     }
@@ -2309,27 +2492,56 @@ const AGENT_SYSTEM = `You are operating a ground-camera geo-calibration tool. Go
 
 What you know about the math: 4+ well-spread pairs are needed to solve (6+ to also fit distortion); pairs clustered in one image region or all on one line solve poorly. World coordinates must be accurate to a few meters — OSM landmark nodes and building corners are exact; Wikipedia coordinates refer to the whole subject (fine for a distant tower, too coarse for a nearby building where you should use its OSM corner instead). For tall structures, pair the visible BASE with z=0, or the top with z set to the structure height.
 
-Working style: seed intrinsics with geocalib_seed, look at the frame, fetch OSM context, then cross-reference what you see with OSM geometry, Wikipedia, and web search to build pairs — segment_object gives exact pixels. If the sun or moon is visible and you know the capture time (from the user's notes or a timestamp overlay burned into the frame — read it), add a celestial pair: it strongly pins orientation. After solving, ALWAYS call look_at_camera and check that projected buildings/roads hug their image features and each numbered cross sits on its same-colored reprojection dot; drop or fix outlier pairs and re-solve. A rough yaw guess via set_param before the first solve helps the optimizer when pairs are few.
+Working style: seed intrinsics with geocalib_seed, look at the frame, fetch OSM context, then cross-reference what you see with OSM geometry and Wikipedia to build pairs — segment_object gives exact pixels (retry misses on small/distant features with a region crop around where you see them). Spread pairs across the frame (left/right, near/far); adding a 5th pair in an empty image region beats a 5th in an already-covered one. If the camera position is not set, determine it yourself — read signs or timestamps in the frame, recognize the scene, use Wikipedia — then call set_camera_position; only give up if it truly cannot be established. If the sun or moon is visible and you know the capture time (from the user's notes or a timestamp overlay burned into the frame — read it), add a celestial pair: it strongly pins orientation. After solving, ALWAYS call look_at_camera and check that projected buildings/roads hug their image features and each numbered cross sits on its same-colored reprojection dot; drop or fix outlier pairs and re-solve. A rough yaw guess via set_param before the first solve helps the optimizer when pairs are few.
 
-Success: RMS under ~5 px is good, under 10 acceptable. You are autonomous — proceed without asking; only give up early if the camera/origin position is missing and cannot be inferred from the scene plus web research. Finish with a short plain-language summary: achieved RMS, the solved yaw/pitch/roll/f/height, which references you used, and your confidence.`;
+Success: RMS under ~5 px is good, under 10 acceptable. You are autonomous — proceed without asking. Finish with a short plain-language summary: achieved RMS, the solved yaw/pitch/roll/f/height, which references you used, and your confidence.`;
 
-async function callClaude(body, signal){
-  const res = await fetch(ANTHROPIC_URL, {
-    method: 'POST',
-    signal,
-    headers: {
-      'content-type': 'application/json',
-      'x-api-key': anthropicKey(),
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify(body),
+/* keep only the newest images in the transcript (the frame is re-obtainable
+   via look_at_camera); older ones become placeholders so tokens stay bounded.
+   Used as the agent's transformContext — copy-on-write, the stored transcript
+   keeps its images */
+function pruneAgentImages(messages, keep = 2){
+  let total = 0;
+  for(const m of messages) if(Array.isArray(m.content))
+    for(const b of m.content) if(b.type === 'image') total++;
+  let toDrop = Math.max(0, total - keep);
+  if(!toDrop) return messages;
+  return messages.map(m => {
+    if(!Array.isArray(m.content) || !m.content.some(b => b.type === 'image')) return m;
+    const content = m.content.map(b => {
+      if(b.type === 'image' && toDrop > 0){
+        toDrop--;
+        return { type: 'text', text: '[earlier frame render pruned — call look_at_camera for a fresh one]' };
+      }
+      return b;
+    });
+    return { ...m, content };
   });
-  if(!res.ok) throw new Error(`Claude API HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  return res.json();
+}
+
+/* one-line result digest for the live log */
+function agentToolSummary(name, out){
+  try{
+    switch(name){
+      case 'solve_pose':          return `RMS ${out.rms.toFixed(2)} px`;
+      case 'fetch_osm':           return `${out.counts.buildings} bld · ${out.counts.roads} rd · ${out.counts.landmarks} lm`;
+      case 'segment_object':      return `px (${out.u}, ${out.v})${out.zoomed ? ' · auto-zoomed' : ''}`;
+      case 'geocalib_seed':       return out.applied.join(' · ');
+      case 'add_pair':            return `#${out.pair_index + 1} (${out.pair_count} total)`;
+      case 'wikipedia_lookup':    return out.coordinates ? `@ ${out.coordinates.lat.toFixed(5)}, ${out.coordinates.lon.toFixed(5)}` : 'no coordinates';
+      case 'set_camera_position': return `${out.camera.lat.toFixed(5)}, ${out.camera.lon.toFixed(5)}`;
+      case 'celestial_position':  return `az ${out.azimuth_deg}° el ${out.elevation_deg}°`;
+      case 'add_celestial_pair':  return `az ${out.azimuth_deg}° el ${out.elevation_deg}° → #${out.pair_index + 1}`;
+    }
+  }catch(_){ /* summaries are cosmetic */ }
+  return '';
 }
 
 let agentAbort = null;
+let piAgent = null;        // survives interrupts so Continue can resume the run
+let piAgentTurns = 0;
+let agentGoalSent = '';
+const AGENT_MAX_TURNS = 40;
 function agentLog(cls, text){
   const box = document.getElementById('agentLog');
   const div = document.createElement('div');
@@ -2339,85 +2551,113 @@ function agentLog(cls, text){
   box.scrollTop = box.scrollHeight;
 }
 
-document.getElementById('btnAgentStop').onclick = () => { agentAbort?.abort(); };
-document.getElementById('btnAgentRun').onclick = async () => {
-  const btn = document.getElementById('btnAgentRun');
-  const stopBtn = document.getElementById('btnAgentStop');
-  if(!state.img) return setMsg('Load a camera image first.');
-  if(!anthropicKey()) return setMsg('Save an Anthropic API key in Settings first.');
-  document.getElementById('agentLog').innerHTML = '';
-  btn.disabled = true; stopBtn.disabled = false;
-  agentAbort = new AbortController();
-  const signal = agentAbort.signal;
+function agentButtons(running){
+  document.getElementById('btnAgentRun').disabled = running;
+  document.getElementById('btnAgentStop').disabled = !running;
+  document.getElementById('btnAgentContinue').disabled = running || !piAgent?.state.messages.length;
+}
+
+/* shared runner around prompt()/continue(): busy state, interrupt wiring,
+   auto-resume on transient API errors, final status */
+async function driveAgent(run){
+  let stopped = false;
+  agentAbort = { abort: () => { stopped = true; piAgent?.abort(); } };
+  agentButtons(true);
   try{
-    const goal = document.getElementById('agentGoal').value.trim();
-    const { dataUrl } = await frameForAI();
-    const messages = [{
-      role: 'user',
-      content: [
-        { type: 'text', text:
-          (goal ? 'Operator notes: ' + goal + '\n\n' : '') +
-          'Calibrate this camera. Current state:\n' + JSON.stringify(agentGetState()) +
-          '\n\nThe camera frame follows (downscaled; report pixels in the full-resolution frame).' },
-        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: dataUrl.split(',')[1] } },
-      ],
-    }];
-    let containerId = null;   // code-execution container behind web_search dynamic filtering
-    for(let iter = 0; iter < 40; iter++){
-      const msg = await callClaude({
-        model: document.getElementById('agentModel').value.trim() || 'claude-opus-4-8',
-        max_tokens: 16000,
-        thinking: { type: 'adaptive' },
-        system: AGENT_SYSTEM,
-        tools: AGENT_TOOLS,
-        messages,
-        ...(containerId ? { container: containerId } : {}),
-      }, signal);
-      if(msg.container?.id) containerId = msg.container.id;
-      for(const block of msg.content || []){
-        if(block.type === 'text' && block.text.trim())
-          agentLog(msg.stop_reason === 'end_turn' ? 'al-text al-final' : 'al-text', block.text.trim());
-      }
-      if(msg.stop_reason === 'pause_turn'){
-        messages.push({ role: 'assistant', content: msg.content });
-        continue;
-      }
-      if(msg.stop_reason === 'refusal'){
-        agentLog('al-tool err', 'The model declined this request (stop_reason: refusal).');
-        break;
-      }
-      if(msg.stop_reason !== 'tool_use'){
-        setMsg('Agent finished.');
-        break;
-      }
-      messages.push({ role: 'assistant', content: msg.content });
-      const results = [];
-      for(const tu of msg.content.filter(b => b.type === 'tool_use')){
-        const argStr = JSON.stringify(tu.input);
-        try{
-          const out = await executeAgentTool(tu.name, tu.input);
-          agentLog('al-tool', `→ ${tu.name} ${argStr.length > 90 ? argStr.slice(0, 90) + '…' : argStr} ✓`);
-          results.push({
-            type: 'tool_result',
-            tool_use_id: tu.id,
-            content: Array.isArray(out) ? out : (typeof out === 'string' ? out : JSON.stringify(out)),
-          });
-        }catch(err){
-          agentLog('al-tool err', `→ ${tu.name} ✗ ${err.message}`);
-          results.push({ type: 'tool_result', tool_use_id: tu.id, content: String(err.message), is_error: true });
-        }
-        if(signal.aborted) break;
-      }
-      messages.push({ role: 'user', content: results });
-      if(signal.aborted) throw new DOMException('stopped', 'AbortError');
+    await run();
+    /* transient API failure (rate limit, provider blip): resume the run from
+       the surviving context instead of ending it. continue() needs the last
+       message to be user/toolResult — drop the errored assistant tail first. */
+    for(let retry = 0; piAgent?.state.errorMessage && !stopped && retry < 3; retry++){
+      const msgs = piAgent.state.messages;
+      while(msgs.length && msgs.at(-1).role === 'assistant') msgs.pop();
+      if(!msgs.length || piAgentTurns >= AGENT_MAX_TURNS) break;
+      const waitMs = 2000 * Math.pow(2, retry);
+      agentLog('al-tool', `… API error (${piAgent.state.errorMessage.slice(0, 120)}), resuming in ${Math.round(waitMs/1000)} s`);
+      await new Promise(ok => setTimeout(ok, waitMs));
+      if(stopped) break;
+      await piAgent.continue();
+    }
+    if(stopped){
+      agentLog('al-tool err', '⏸ interrupted — Continue resumes from here (edit the notes box to steer)');
+      setMsg('Agent interrupted — press Continue to resume.');
+    } else if(piAgent?.state.errorMessage){
+      agentLog('al-tool err', 'Agent error: ' + piAgent.state.errorMessage);
+      setMsg('Agent error: ' + piAgent.state.errorMessage);
+    } else {
+      setMsg('Agent finished' + (state.lastRMS != null ? ` — RMS ${state.lastRMS.toFixed(2)} px.` : '.'));
     }
   }catch(err){
-    if(err.name === 'AbortError'){ agentLog('al-tool err', '■ stopped by user'); setMsg('Agent stopped.'); }
-    else { agentLog('al-tool err', 'Agent error: ' + err.message); setMsg('Agent error: ' + err.message); }
+    agentLog('al-tool err', 'Agent error: ' + err.message);
+    setMsg('Agent error: ' + err.message);
   }finally{
-    btn.disabled = false; stopBtn.disabled = true;
+    agentButtons(false);
     agentAbort = null;
   }
+}
+
+document.getElementById('btnAgentStop').onclick = () => { agentAbort?.abort(); };
+
+document.getElementById('btnAgentRun').onclick = () => {
+  if(!state.img) return setMsg('Load a camera image first.');
+  if(!hfToken()) return setMsg('Save an HF token in Settings first.');
+  document.getElementById('agentLog').innerHTML = '';
+  piAgent = null;
+  piAgentTurns = 0;
+  driveAgent(async () => {
+    const { Agent } = await loadPiAgent();
+    const goal = agentGoalSent = document.getElementById('agentGoal').value.trim();
+    const { dataUrl } = await frameForAI();
+    piAgent = new Agent({
+      initialState: {
+        systemPrompt: AGENT_SYSTEM,
+        model: agentModelFor(document.getElementById('agentModel').value.trim() || 'Qwen/Qwen3.6-27B:deepinfra'),
+        tools: piAgentTools(),
+      },
+      getApiKey: async () => hfToken(),
+      transformContext: messages => pruneAgentImages(messages),
+      toolExecution: 'sequential',
+    });
+    piAgent.subscribe(event => {
+      if(event.type === 'message_end' && event.message.role === 'assistant'){
+        const text = (event.message.content || [])
+          .filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+        if(text) agentLog(event.message.stopReason === 'stop' ? 'al-text al-final' : 'al-text', text);
+      }
+      if(event.type === 'turn_end' && ++piAgentTurns >= AGENT_MAX_TURNS - 3){
+        if(piAgentTurns >= AGENT_MAX_TURNS) piAgent.abort();
+        else piAgent.steer({ role: 'user', timestamp: Date.now(), content:
+          `[system] Only ${AGENT_MAX_TURNS - piAgentTurns} step(s) left before the run is cut off — solve with the pairs you have, verify once with look_at_camera, and give your final summary now.` });
+      }
+    });
+    await piAgent.prompt(
+      (goal ? 'Operator notes: ' + goal + '\n\n' : '') +
+      'Calibrate this camera. Current state:\n' + JSON.stringify(agentGetState()) +
+      '\n\nThe camera frame follows (downscaled; report pixels in the full-resolution frame).',
+      [{ type: 'image', data: dataUrl.split(',')[1], mimeType: 'image/jpeg' }],
+    );
+  });
+};
+
+document.getElementById('btnAgentContinue').onclick = () => {
+  if(!piAgent || !piAgent.state.messages.length) return setMsg('Nothing to continue — run the agent first.');
+  if(!hfToken()) return setMsg('Save an HF token in Settings first.');
+  /* an interrupted/errored run may end on an assistant message; continue()
+     needs user/toolResult last, so drop the dangling tail */
+  driveAgent(async () => {
+    const msgs = piAgent.state.messages;
+    while(msgs.length && msgs.at(-1).role === 'assistant') msgs.pop();
+    if(!msgs.length) throw new Error('no context left to continue from — start a new run');
+    /* grant more turn budget so a resumed run isn't cut off immediately */
+    piAgentTurns = Math.min(piAgentTurns, AGENT_MAX_TURNS - 10);
+    const note = document.getElementById('agentGoal').value.trim();
+    if(note && note !== agentGoalSent){
+      agentGoalSent = note;
+      await piAgent.prompt('Operator note: ' + note + '\n\nContinue calibrating with this in mind.');
+    } else {
+      await piAgent.continue();
+    }
+  });
 };
 
 /* =====================================================================
@@ -2425,32 +2665,12 @@ document.getElementById('btnAgentRun').onclick = async () => {
    ===================================================================== */
 const HF_TOKEN_KEY = 'ground-camera-calibrator.hfToken';
 function hfToken(){ return localStorage.getItem(HF_TOKEN_KEY) || ''; }
-const ANT_KEY_KEY = 'ground-camera-calibrator.anthropicKey';
-function anthropicKey(){ return localStorage.getItem(ANT_KEY_KEY) || ''; }
 const AGENT_MODEL_KEY = 'ground-camera-calibrator.agentModel';
 (function initAgentSettings(){
-  const input = document.getElementById('anthropicKeyInput');
-  const status = document.getElementById('antKeyStatus');
-  const show = () => {
-    const t = anthropicKey();
-    input.value = t;
-    status.textContent = t ? `saved (…${t.slice(-4)})` : 'not set';
-  };
-  document.getElementById('btnSaveAntKey').onclick = () => {
-    const t = input.value.trim();
-    if(!t) return setMsg('Key is empty — use Clear to remove the saved one.');
-    localStorage.setItem(ANT_KEY_KEY, t);
-    show();
-    setMsg('Anthropic key saved to this browser.');
-  };
-  document.getElementById('btnClearAntKey').onclick = () => {
-    localStorage.removeItem(ANT_KEY_KEY);
-    show();
-    setMsg('Anthropic key cleared.');
-  };
-  show();
   const model = document.getElementById('agentModel');
-  model.value = localStorage.getItem(AGENT_MODEL_KEY) || model.value;
+  const saved = localStorage.getItem(AGENT_MODEL_KEY);
+  /* ignore models saved before the switches to HF Inference Providers / DeepInfra */
+  if(saved && !/^claude|:featherless/i.test(saved)) model.value = saved;
   model.onchange = () => localStorage.setItem(AGENT_MODEL_KEY, model.value.trim());
 })();
 (function initSettings(){
