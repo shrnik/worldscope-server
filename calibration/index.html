@@ -1968,31 +1968,11 @@ async function lookupLandmark(it, out, btn){
 }
 
 /* =====================================================================
-   AGENT AUTO-CALIBRATE  (pi-agent-core drives the tool loop; the model
-   runs on HF Inference Providers via pi-ai's huggingface provider, same
-   token as the rest of the app. The agent model is the VLM: it sees the
-   frame and the annotated render.)
+   AGENT AUTO-CALIBRATE  (tool schemas, prompts, and the pi-agent-core
+   plumbing live in js/agent/; this block is the page-side glue: state
+   snapshots, renders, and the tool implementations that touch app state.
+   The model runs on HF Inference Providers, same token as the rest.)
    ===================================================================== */
-let piAgentModule = null;   // lazy-loaded on the first run
-function loadPiAgent(){
-  return piAgentModule ??= import('https://esm.sh/@earendil-works/pi-agent-core@0.80.3?bundle');
-}
-
-/* pi-ai Model record for an arbitrary HF router model id */
-function agentModelFor(id){
-  return {
-    id, name: id,
-    api: 'openai-completions',
-    provider: 'huggingface',
-    baseUrl: 'https://router.huggingface.co/v1',
-    reasoning: false,
-    input: ['text', 'image'],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128000,
-    maxTokens: 8192,
-  };
-}
-
 /* compact state snapshot for the agent */
 function agentGetState(){
   return {
@@ -2089,238 +2069,60 @@ function renderAnnotatedFrame(maxW = 1024){
   return c.toDataURL('image/jpeg', 0.85);
 }
 
-const AGENT_TOOLS = [
-  { name: 'get_state',
-    description: 'Current calibration state: image size, origin, camera GPS, parameters, all pairs with reprojection errors, overall RMS, and loaded OSM data counts.',
-    input_schema: { type: 'object', properties: {}, additionalProperties: false } },
-  { name: 'look_at_camera',
-    description: 'Returns a render of the camera frame with every overlay drawn at the CURRENT parameters: projected OSM building outlines (teal), roads (orange), landmark dots, SAM3 masks/marks (magenta), and pairs (numbered crosses; the small dot of the same color is where that pair currently reprojects — cross far from dot = bad fit). Call this to identify landmarks in the scene and to visually verify calibration after solving.',
-    input_schema: { type: 'object', properties: {}, additionalProperties: false } },
-  { name: 'fetch_osm',
-    description: 'Fetch OpenStreetMap context around the camera: building footprints, roads, and point landmarks (poles, signals, trees, signs...). Returns counts plus exact coordinates of landmarks and building corners for pairing.',
-    input_schema: { type: 'object', properties: {
-      radius_m: { type: 'number', description: 'Fetch radius in meters (50-600)', minimum: 50, maximum: 600 },
-    }, required: ['radius_m'], additionalProperties: false } },
-  { name: 'segment_object',
-    description: 'SAM3 text-prompted segmentation on the camera frame. Give a short noun phrase ("red brick clock tower", "leftmost street lamp"); returns the exact full-resolution pixel centroid of the best match and draws its mask on the image. Small matches are automatically re-segmented on a native-resolution crop for precise pixels (zoomed: true in the result). For tiny or distant features SAM3 misses on the full frame, pass `region` — a full-res pixel rect around where you believe the feature is (from look_at_camera) — and only that crop is sent, at native resolution. Note: the centroid is the mask center of mass — for a building prefer pairing a corner or its base.',
-    input_schema: { type: 'object', properties: {
-      query: { type: 'string', description: '2-5 word noun phrase locating one object' },
-      region: { type: 'object', description: 'Optional crop to segment within, in full-resolution frame pixels. Pad generously (2-3x the feature size).',
-        properties: {
-          x: { type: 'number' }, y: { type: 'number' },
-          w: { type: 'number' }, h: { type: 'number' },
-        }, required: ['x', 'y', 'w', 'h'], additionalProperties: false },
-    }, required: ['query'], additionalProperties: false } },
-  { name: 'wikipedia_lookup',
-    description: 'Look up a named landmark on Wikipedia. Returns title, summary, URL, and — for geographic subjects — exact coordinates usable as the world side of a pair.',
-    input_schema: { type: 'object', properties: {
-      name: { type: 'string' },
-    }, required: ['name'], additionalProperties: false } },
-  { name: 'geocalib_seed',
-    description: 'Run the GeoCalib neural network on the frame to estimate focal length, k1 distortion, pitch, and roll from image cues alone; applies them to the parameters. Good first step. Does NOT estimate yaw or position. May take a minute on a cold start.',
-    input_schema: { type: 'object', properties: {}, additionalProperties: false } },
-  { name: 'set_camera_position',
-    description: 'Set the camera GPS position (and the local origin, if not set yet). Use once you have determined where the camera is — from operator notes, scene recognition, Wikipedia, or web search. Required before fetch_osm and add_pair can work when the user left position empty.',
-    input_schema: { type: 'object', properties: {
-      lat: { type: 'number' }, lon: { type: 'number' },
-      height_m: { type: 'number', description: 'Camera height above local ground in meters, if known (e.g. rooftop mount)' },
-    }, required: ['lat', 'lon'], additionalProperties: false } },
-  { name: 'add_pair',
-    description: 'Add an image<->world correspondence: pixel (u,v) in the full-resolution frame paired with a world coordinate (lat, lon, optional height above local ground in meters).',
-    input_schema: { type: 'object', properties: {
-      u: { type: 'number' }, v: { type: 'number' },
-      lat: { type: 'number' }, lon: { type: 'number' },
-      z_m: { type: 'number', description: 'Height above local ground of the world point (e.g. top of a 20 m tower = 20). Default 0 (ground).' },
-      label: { type: 'string', description: 'Short name of the feature' },
-    }, required: ['u', 'v', 'lat', 'lon'], additionalProperties: false } },
-  { name: 'remove_pair',
-    description: 'Delete a pair by its index (from get_state / solve_pose). Use on outliers.',
-    input_schema: { type: 'object', properties: {
-      index: { type: 'integer' },
-    }, required: ['index'], additionalProperties: false } },
-  { name: 'set_param',
-    description: 'Directly set one camera parameter (e.g. a rough yaw guess before solving, or a known mounting height).',
-    input_schema: { type: 'object', properties: {
-      key: { type: 'string', enum: ['yaw', 'pitch', 'roll', 'f', 'height', 'k1', 'k2'] },
-      value: { type: 'number' },
-    }, required: ['key', 'value'], additionalProperties: false } },
-  { name: 'solve_pose',
-    description: 'Solve the full camera pose from the current pairs (needs 4+; 6+ for distortion). Writes the solution to the parameters and returns RMS plus per-pair reprojection errors.',
-    input_schema: { type: 'object', properties: {
-      solve_focal: { type: 'boolean', description: 'Also optimize focal length (recommended unless geocalib_seed gave a confident f)' },
-      solve_distortion: { type: 'boolean', description: 'Also optimize k1/k2 (needs 6+ pairs)' },
-    }, additionalProperties: false } },
-  { name: 'celestial_position',
-    description: 'Azimuth/elevation of the sun or moon as seen from the camera at a given UTC time. Use to sanity-check before add_celestial_pair.',
-    input_schema: { type: 'object', properties: {
-      body: { type: 'string', enum: ['sun', 'moon'] },
-      timestamp_utc: { type: 'string', description: 'ISO 8601 UTC time of the frame, e.g. 2026-07-03T18:40:00Z' },
-    }, required: ['body', 'timestamp_utc'], additionalProperties: false } },
-  { name: 'add_celestial_pair',
-    description: 'If the sun or moon is visible in the frame AND the capture time is known (user notes, or a timestamp burned into the frame), pair its pixel position with its computed sky direction. One celestial pair strongly constrains yaw/pitch/roll — very valuable when few ground landmarks exist.',
-    input_schema: { type: 'object', properties: {
-      body: { type: 'string', enum: ['sun', 'moon'] },
-      timestamp_utc: { type: 'string', description: 'ISO 8601 UTC capture time' },
-      u: { type: 'number', description: 'Pixel x of the body center (full-res frame)' },
-      v: { type: 'number', description: 'Pixel y of the body center' },
-    }, required: ['body', 'timestamp_utc', 'u', 'v'], additionalProperties: false } },
-];
-/* same tools as pi AgentTool records: executeAgentTool does the work, the
-   wrapper adapts results (pi tool results carry text and image blocks) and
-   feeds the live log */
-function piAgentTools(){
-  return AGENT_TOOLS.map(t => ({
-    name: t.name,
-    label: t.name,
-    description: t.description,
-    parameters: t.input_schema,
-    execute: async (toolCallId, params) => {
-      const argStr = JSON.stringify(params ?? {});
-      try{
-        const out = await executeAgentTool(t.name, params ?? {});
-        const digest = agentToolSummary(t.name, out);
-        agentLog('al-tool', `→ ${t.name} ${argStr.length > 90 ? argStr.slice(0, 90) + '…' : argStr} ✓${digest ? ' — ' + digest : ''}`);
-        return { content: Array.isArray(out) ? out
-          : [{ type: 'text', text: typeof out === 'string' ? out : JSON.stringify(out) }] };
-      }catch(err){
-        /* never throw: a failed tool becomes a normal text result, so the run
-           keeps going and the model can retry or route around it */
-        const reason = err?.message || String(err);
-        agentLog('al-tool err', `→ ${t.name} ✗ ${reason}`);
-        return { content: [{ type: 'text', text:
-          `${t.name} failed: ${reason}. This is not fatal — adjust the arguments (different query, region, or values) or continue with another approach.` }] };
-      }
-    },
-  }));
+/* page-side implementations for the agent tools that touch app state
+   (schemas + dispatch live in js/agent/tools.js) */
+function agentSetCameraPosition(lat, lon, height_m){
+  if(!state.origin) setOrigin(lat, lon);
+  params.lat = lat; params.lon = lon;
+  if(typeof height_m === 'number') params.height = height_m;
+  syncParamUI(); placeCameraMarker(); onParamsChanged(); refreshTable();
+  map.setView([lat, lon], 17);
+  return { camera: { lat: params.lat, lon: params.lon, height_m: params.height }, origin: state.origin };
+}
+async function agentAddPair({ u, v, lat, lon, z_m, label }){
+  if(!state.origin) throw new Error('origin is not set — call set_camera_position first');
+  addPair(u, v, lat, lon, label);
+  const p = state.pairs.at(-1);
+  if(typeof z_m === 'number') p.z = z_m;
+  updateResiduals(); refreshTable(); drawImage();
+  return { pair_index: state.pairs.length - 1, pair_count: state.pairs.length };
+}
+function agentRemovePair(index){
+  if(!state.pairs[index]) throw new Error('no pair at index ' + index);
+  removePair(index);
+  return { pair_count: state.pairs.length };
 }
 
-async function executeAgentTool(name, input){
-  switch(name){
-    case 'get_state':
-      return agentGetState();
-    case 'look_at_camera': {
-      if(!state.img) throw new Error('no camera image loaded');
-      const dataUrl = renderAnnotatedFrame();
-      const rms = state.lastRMS;
-      return [
-        { type: 'image', data: dataUrl.split(',')[1], mimeType: 'image/jpeg' },
-        { type: 'text', text: `Annotated render at current parameters. RMS: ${rms != null ? rms.toFixed(2) + ' px' : 'n/a (not solved yet)'}. Pixel coordinates you give in other tools must be in the full ${state.imgW}x${state.imgH} frame (this render is scaled by ${(Math.min(1, 1024/state.imgW)).toFixed(4)}).` },
-      ];
-    }
-    case 'fetch_osm': {
-      const res = await fetchOSM(Math.min(600, Math.max(50, input.radius_m)));
-      const landmarks = state.landmarks.slice(0, 150).map(l => ({ type: l.label, lat: +l.lat.toFixed(7), lon: +l.lon.toFixed(7) }));
-      const buildings = state.footprints.slice(0, 40).map(fp => ({
-        height_m: fp.height,
-        corners: fp.ring.slice(0, 12).map(c => [+c[0].toFixed(7), +c[1].toFixed(7)]),
-      }));
-      return { counts: res, landmarks, buildings,
-        note: 'corner/landmark coordinates are exact — prefer them as the world side of pairs' };
-    }
-    case 'segment_object': {
-      let region = null;
-      if(input.region){
-        const cl = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-        const x = cl(input.region.x, 0, state.imgW - 1), y = cl(input.region.y, 0, state.imgH - 1);
-        region = { x, y, w: cl(input.region.w, 16, state.imgW - x), h: cl(input.region.h, 16, state.imgH - y) };
-      }
-      return await sam3Segment(input.query, region);
-    }
-    case 'wikipedia_lookup':
-      return await wikiLookup(input.name);
-    case 'geocalib_seed':
-      return await geoCalibSeed();
-    case 'set_camera_position': {
-      if(!state.origin) setOrigin(input.lat, input.lon);
-      params.lat = input.lat; params.lon = input.lon;
-      if(typeof input.height_m === 'number') params.height = input.height_m;
-      syncParamUI(); placeCameraMarker(); onParamsChanged(); refreshTable();
-      map.setView([input.lat, input.lon], 17);
-      return { camera: { lat: params.lat, lon: params.lon, height_m: params.height }, origin: state.origin };
-    }
-    case 'add_pair': {
-      if(!state.origin) throw new Error('origin is not set — call set_camera_position first');
-      addPair(input.u, input.v, input.lat, input.lon, input.label);
-      const p = state.pairs.at(-1);
-      if(typeof input.z_m === 'number') p.z = input.z_m;
-      updateResiduals(); refreshTable(); drawImage();
-      return { pair_index: state.pairs.length - 1, pair_count: state.pairs.length };
-    }
-    case 'remove_pair': {
-      if(!state.pairs[input.index]) throw new Error('no pair at index ' + input.index);
-      removePair(input.index);
-      return { pair_count: state.pairs.length };
-    }
-    case 'set_param': {
-      paramInputs[input.key].set(input.value);
-      onParamsChanged();
-      return { [input.key]: input.value };
-    }
-    case 'solve_pose':
-      return solvePose({ solveFocal: !!input.solve_focal, solveDistortion: !!input.solve_distortion });
-    case 'celestial_position':
-      return celestialPosition(input.body, input.timestamp_utc);
-    case 'add_celestial_pair':
-      return addCelestialPair(input.body, input.timestamp_utc, input.u, input.v);
-    default:
-      throw new Error('unknown tool: ' + name);
-  }
+/* the single seam between the page and js/agent/: everything the tool
+   executors and the runner need, as one object */
+function agentHost(){
+  return {
+    getState: agentGetState,
+    hasImage: () => !!state.img,
+    imageSize: () => ({ w: state.imgW, h: state.imgH }),
+    getRMS: () => state.lastRMS ?? null,
+    renderAnnotatedFrame,
+    hfToken,
+    agentModelId: () => document.getElementById('agentModel').value.trim() || 'Qwen/Qwen3.6-27B:deepinfra',
+    fetchOSM,
+    landmarks: () => state.landmarks,
+    footprints: () => state.footprints,
+    sam3Segment,
+    wikiLookup,
+    geoCalibSeed,
+    setCameraPosition: agentSetCameraPosition,
+    addPair: agentAddPair,
+    removePair: agentRemovePair,
+    setParam: (key, value) => { paramInputs[key].set(value); onParamsChanged(); },
+    solvePose,
+    celestialPosition,
+    addCelestialPair,
+    agentLog,
+    setMsg,
+    agentButtons,
+  };
 }
 
-const AGENT_SYSTEM = `You are operating a ground-camera geo-calibration tool. Goal: solve the camera's pose (position, yaw/pitch/roll, focal length, distortion) by pairing pixels in the camera frame with world coordinates, then minimizing reprojection error.
-
-What you know about the math: 4+ well-spread pairs are needed to solve (6+ to also fit distortion); pairs clustered in one image region or all on one line solve poorly. World coordinates must be accurate to a few meters — OSM landmark nodes and building corners are exact; Wikipedia coordinates refer to the whole subject (fine for a distant tower, too coarse for a nearby building where you should use its OSM corner instead). For tall structures, pair the visible BASE with z=0, or the top with z set to the structure height.
-
-Working style: seed intrinsics with geocalib_seed, look at the frame, fetch OSM context, then cross-reference what you see with OSM geometry and Wikipedia to build pairs — segment_object gives exact pixels (retry misses on small/distant features with a region crop around where you see them). Spread pairs across the frame (left/right, near/far); adding a 5th pair in an empty image region beats a 5th in an already-covered one. If the camera position is not set, determine it yourself — read signs or timestamps in the frame, recognize the scene, use Wikipedia — then call set_camera_position; only give up if it truly cannot be established. If the sun or moon is visible and you know the capture time (from the user's notes or a timestamp overlay burned into the frame — read it), add a celestial pair: it strongly pins orientation. After solving, ALWAYS call look_at_camera and check that projected buildings/roads hug their image features and each numbered cross sits on its same-colored reprojection dot; drop or fix outlier pairs and re-solve. A rough yaw guess via set_param before the first solve helps the optimizer when pairs are few.
-
-Success: RMS under ~5 px is good, under 10 acceptable. You are autonomous — proceed without asking. Finish with a short plain-language summary: achieved RMS, the solved yaw/pitch/roll/f/height, which references you used, and your confidence.`;
-
-/* keep only the newest images in the transcript (the frame is re-obtainable
-   via look_at_camera); older ones become placeholders so tokens stay bounded.
-   Used as the agent's transformContext — copy-on-write, the stored transcript
-   keeps its images */
-function pruneAgentImages(messages, keep = 2){
-  let total = 0;
-  for(const m of messages) if(Array.isArray(m.content))
-    for(const b of m.content) if(b.type === 'image') total++;
-  let toDrop = Math.max(0, total - keep);
-  if(!toDrop) return messages;
-  return messages.map(m => {
-    if(!Array.isArray(m.content) || !m.content.some(b => b.type === 'image')) return m;
-    const content = m.content.map(b => {
-      if(b.type === 'image' && toDrop > 0){
-        toDrop--;
-        return { type: 'text', text: '[earlier frame render pruned — call look_at_camera for a fresh one]' };
-      }
-      return b;
-    });
-    return { ...m, content };
-  });
-}
-
-/* one-line result digest for the live log */
-function agentToolSummary(name, out){
-  try{
-    switch(name){
-      case 'solve_pose':          return `RMS ${out.rms.toFixed(2)} px`;
-      case 'fetch_osm':           return `${out.counts.buildings} bld · ${out.counts.roads} rd · ${out.counts.landmarks} lm`;
-      case 'segment_object':      return `px (${out.u}, ${out.v})${out.zoomed ? ' · auto-zoomed' : ''}`;
-      case 'geocalib_seed':       return out.applied.join(' · ');
-      case 'add_pair':            return `#${out.pair_index + 1} (${out.pair_count} total)`;
-      case 'wikipedia_lookup':    return out.coordinates ? `@ ${out.coordinates.lat.toFixed(5)}, ${out.coordinates.lon.toFixed(5)}` : 'no coordinates';
-      case 'set_camera_position': return `${out.camera.lat.toFixed(5)}, ${out.camera.lon.toFixed(5)}`;
-      case 'celestial_position':  return `az ${out.azimuth_deg}° el ${out.elevation_deg}°`;
-      case 'add_celestial_pair':  return `az ${out.azimuth_deg}° el ${out.elevation_deg}° → #${out.pair_index + 1}`;
-    }
-  }catch(_){ /* summaries are cosmetic */ }
-  return '';
-}
-
-let agentAbort = null;
-let piAgent = null;        // survives interrupts so Continue can resume the run
-let piAgentTurns = 0;
-let agentGoalSent = '';
-const AGENT_MAX_TURNS = 40;
 function agentLog(cls, text){
   const box = document.getElementById('agentLog');
   const div = document.createElement('div');
@@ -2330,113 +2132,36 @@ function agentLog(cls, text){
   box.scrollTop = box.scrollHeight;
 }
 
-function agentButtons(running){
+function agentButtons(running, hasContext){
   document.getElementById('btnAgentRun').disabled = running;
   document.getElementById('btnAgentStop').disabled = !running;
-  document.getElementById('btnAgentContinue').disabled = running || !piAgent?.state.messages.length;
+  document.getElementById('btnAgentContinue').disabled = running || !hasContext;
 }
 
-/* shared runner around prompt()/continue(): busy state, interrupt wiring,
-   auto-resume on transient API errors, final status */
-async function driveAgent(run){
-  let stopped = false;
-  agentAbort = { abort: () => { stopped = true; piAgent?.abort(); } };
-  agentButtons(true);
-  try{
-    await run();
-    /* transient API failure (rate limit, provider blip): resume the run from
-       the surviving context instead of ending it. continue() needs the last
-       message to be user/toolResult — drop the errored assistant tail first. */
-    for(let retry = 0; piAgent?.state.errorMessage && !stopped && retry < 3; retry++){
-      const msgs = piAgent.state.messages;
-      while(msgs.length && msgs.at(-1).role === 'assistant') msgs.pop();
-      if(!msgs.length || piAgentTurns >= AGENT_MAX_TURNS) break;
-      const waitMs = 2000 * Math.pow(2, retry);
-      agentLog('al-tool', `… API error (${piAgent.state.errorMessage.slice(0, 120)}), resuming in ${Math.round(waitMs/1000)} s`);
-      await new Promise(ok => setTimeout(ok, waitMs));
-      if(stopped) break;
-      await piAgent.continue();
-    }
-    if(stopped){
-      agentLog('al-tool err', '⏸ interrupted — Continue resumes from here (edit the notes box to steer)');
-      setMsg('Agent interrupted — press Continue to resume.');
-    } else if(piAgent?.state.errorMessage){
-      agentLog('al-tool err', 'Agent error: ' + piAgent.state.errorMessage);
-      setMsg('Agent error: ' + piAgent.state.errorMessage);
-    } else {
-      setMsg('Agent finished' + (state.lastRMS != null ? ` — RMS ${state.lastRMS.toFixed(2)} px.` : '.'));
-    }
-  }catch(err){
-    agentLog('al-tool err', 'Agent error: ' + err.message);
-    setMsg('Agent error: ' + err.message);
-  }finally{
-    agentButtons(false);
-    agentAbort = null;
-  }
-}
+let agentRunner = null;   // survives interrupts so Continue can resume the run
 
-document.getElementById('btnAgentStop').onclick = () => { agentAbort?.abort(); };
+document.getElementById('btnAgentStop').onclick = () => { agentRunner?.abort(); };
 
-document.getElementById('btnAgentRun').onclick = () => {
+document.getElementById('btnAgentRun').onclick = async () => {
   if(!state.img) return setMsg('Load a camera image first.');
   if(!hfToken()) return setMsg('Save an HF token in Settings first.');
   document.getElementById('agentLog').innerHTML = '';
-  piAgent = null;
-  piAgentTurns = 0;
-  driveAgent(async () => {
-    const { Agent } = await loadPiAgent();
-    const goal = agentGoalSent = document.getElementById('agentGoal').value.trim();
-    const { dataUrl } = await frameForAI();
-    piAgent = new Agent({
-      initialState: {
-        systemPrompt: AGENT_SYSTEM,
-        model: agentModelFor(document.getElementById('agentModel').value.trim() || 'Qwen/Qwen3.6-27B:deepinfra'),
-        tools: piAgentTools(),
-      },
-      getApiKey: async () => hfToken(),
-      transformContext: messages => pruneAgentImages(messages),
-      toolExecution: 'sequential',
-    });
-    piAgent.subscribe(event => {
-      if(event.type === 'message_end' && event.message.role === 'assistant'){
-        const text = (event.message.content || [])
-          .filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
-        if(text) agentLog(event.message.stopReason === 'stop' ? 'al-text al-final' : 'al-text', text);
-      }
-      if(event.type === 'turn_end' && ++piAgentTurns >= AGENT_MAX_TURNS - 3){
-        if(piAgentTurns >= AGENT_MAX_TURNS) piAgent.abort();
-        else piAgent.steer({ role: 'user', timestamp: Date.now(), content:
-          `[system] Only ${AGENT_MAX_TURNS - piAgentTurns} step(s) left before the run is cut off — solve with the pairs you have, verify once with look_at_camera, and give your final summary now.` });
-      }
-    });
-    await piAgent.prompt(
-      (goal ? 'Operator notes: ' + goal + '\n\n' : '') +
-      'Calibrate this camera. Current state:\n' + JSON.stringify(agentGetState()) +
-      '\n\nThe camera frame follows (downscaled; report pixels in the full-resolution frame).',
-      [{ type: 'image', data: dataUrl.split(',')[1], mimeType: 'image/jpeg' }],
-    );
-  });
+  agentRunner = CalibExt.createAgentRunner(agentHost());
+  const goal = document.getElementById('agentGoal').value.trim();
+  const { dataUrl } = await frameForAI();
+  agentRunner.run(goal,
+    (goal ? 'Operator notes: ' + goal + '\n\n' : '') +
+    'Calibrate this camera. Current state:\n' + JSON.stringify(agentGetState()) +
+    '\n\nThe camera frame follows (downscaled; report pixels in the full-resolution frame).',
+    [{ type: 'image', data: dataUrl.split(',')[1], mimeType: 'image/jpeg' }],
+  );
 };
 
 document.getElementById('btnAgentContinue').onclick = () => {
-  if(!piAgent || !piAgent.state.messages.length) return setMsg('Nothing to continue — run the agent first.');
+  if(!agentRunner?.hasContext()) return setMsg('Nothing to continue — run the agent first.');
   if(!hfToken()) return setMsg('Save an HF token in Settings first.');
-  /* an interrupted/errored run may end on an assistant message; continue()
-     needs user/toolResult last, so drop the dangling tail */
-  driveAgent(async () => {
-    const msgs = piAgent.state.messages;
-    while(msgs.length && msgs.at(-1).role === 'assistant') msgs.pop();
-    if(!msgs.length) throw new Error('no context left to continue from — start a new run');
-    /* grant more turn budget so a resumed run isn't cut off immediately */
-    piAgentTurns = Math.min(piAgentTurns, AGENT_MAX_TURNS - 10);
-    const note = document.getElementById('agentGoal').value.trim();
-    if(note && note !== agentGoalSent){
-      agentGoalSent = note;
-      await piAgent.prompt('Operator note: ' + note + '\n\nContinue calibrating with this in mind.');
-    } else {
-      await piAgent.continue();
-    }
-  });
+  agentRunner.continueRun(document.getElementById('agentGoal').value.trim())
+    .catch(err => setMsg(err.message));
 };
 
 /* =====================================================================
