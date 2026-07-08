@@ -28,6 +28,11 @@ export const AGENT_TOOLS = [
     input_schema: { type: 'object', properties: {
       name: { type: 'string' },
     }, required: ['name'], additionalProperties: false } },
+  { name: 'street_level_view',
+    description: 'Nearest street-level photo (Mapillary) to a world coordinate, with its capture position and compass heading. Use it to see what a landmark looks like from the ground before pairing it, or to confirm a feature\'s identity. Fails gracefully when no photos exist nearby or no Mapillary token is saved.',
+    input_schema: { type: 'object', properties: {
+      lat: { type: 'number' }, lon: { type: 'number' },
+    }, required: ['lat', 'lon'], additionalProperties: false } },
   { name: 'geocalib_seed',
     description: 'Run the GeoCalib neural network on the frame to estimate focal length, k1 distortion, pitch, and roll from image cues alone; applies them to the parameters. Good first step. Does NOT estimate yaw or position. May take a minute on a cold start.',
     input_schema: { type: 'object', properties: {}, additionalProperties: false } },
@@ -126,6 +131,8 @@ export async function executeAgentTool(host, name, input){
     }
     case 'wikipedia_lookup':
       return await host.wikiLookup(input.name);
+    case 'street_level_view':
+      return await host.streetLevelView(input.lat, input.lon);
     case 'geocalib_seed':
       return await host.geoCalibSeed();
     case 'set_camera_position':

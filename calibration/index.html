@@ -282,6 +282,7 @@ footer .grow{flex:1}
       <p class="hint">Fetch OpenStreetMap building footprints <b>and</b> point landmarks (street lamps, poles, manholes, signals, signs, benches, trees) around the camera. Landmarks and building corners are exact coordinates &mdash; map clicks snap to them while adding pairs.</p>
       <div class="prow"><label>radius m</label><input type="range" id="osmRadiusR" min="50" max="600" step="10" value="200"><input type="number" id="osmRadiusN" min="50" max="600" step="10" value="200"></div>
       <button class="act world" id="btnFetchOSM">Fetch buildings + roads + landmarks</button>
+      <button class="act" id="btnMapillary" title="Show nearby street-level photos (Mapillary) on the map for cross-referencing landmarks from the ground. Needs the Mapillary token from Settings.">Street-level photos (Mapillary)</button>
       <label class="checkline"><input type="checkbox" id="optShowFp" checked> Buildings on camera image</label>
       <label class="checkline"><input type="checkbox" id="optShowLm" checked> Landmarks on camera image</label>
       <label class="checkline"><input type="checkbox" id="optSnap" checked> Snap pair clicks to landmarks / corners</label>
@@ -332,6 +333,13 @@ footer .grow{flex:1}
       <div class="kv"><span>Status</span><b id="tokenStatus">not set</b></div>
       <p class="hint" style="margin-top:10px">Auto-calibrate agent model (section 8) &mdash; any tool-calling vision model on HF Inference Providers, billed to the HF token above.</p>
       <div class="prow"><label>Agent model</label><input type="text" id="agentModel" value="Qwen/Qwen3.6-27B:deepinfra" spellcheck="false" style="flex:1"></div>
+      <p class="hint" style="margin-top:10px">Mapillary client token &mdash; enables street-level photos (section 6). Free at <a href="https://www.mapillary.com/dashboard/developers" target="_blank" rel="noopener">mapillary.com/dashboard/developers</a>; stored only in this browser.</p>
+      <div class="prow"><label>Mapillary</label><input type="password" id="mlyTokenInput" placeholder="MLY|..." autocomplete="off" style="flex:1"></div>
+      <div class="btnrow">
+        <button class="act primary" id="btnSaveMlyToken">Save token</button>
+        <button class="act" id="btnClearMlyToken">Clear</button>
+      </div>
+      <div class="kv"><span>Status</span><b id="mlyTokenStatus">not set</b></div>
     </div>
   </details>
 
@@ -1636,6 +1644,7 @@ function clearOSM(){
   fpLayer.clearLayers();
   roadLayer.clearLayers();
   lmLayer.clearLayers();
+  mlyLayer.clearLayers();
   state.footprints = [];
   state.roads = [];
   state.landmarks = [];
@@ -1655,6 +1664,77 @@ document.getElementById('optOnlyRoads').onchange = () => {
   drawImage();
 };
 document.getElementById('optHorizon').onchange = drawImage;
+
+/* =====================================================================
+   STREET-LEVEL PHOTOS  (Mapillary; client in js/api/mapillary.js)
+   Ground-level views near the camera, as map markers with photo popups.
+   IMPORTANT: never draw these cross-origin photos into imgCanvas — that
+   would taint it and break renderAnnotatedFrame()'s toDataURL().
+   ===================================================================== */
+const mlyLayer = L.layerGroup().addTo(map);
+document.getElementById('btnMapillary').onclick = async () => {
+  const btn = document.getElementById('btnMapillary');
+  if(!mapillaryToken()) return setMsg('Save a Mapillary client token in Settings first.');
+  const lat = params.lat ?? state.origin?.lat, lon = params.lon ?? state.origin?.lon;
+  if(lat === undefined || lat === null) return setMsg('Place the camera or origin first.');
+  btn.disabled = true; btn.textContent = 'Fetching…';
+  try{
+    const imgs = await CalibExt.mapillary.fetchMapillaryImages({
+      lat, lon, radiusM: +radN.value, token: mapillaryToken(), limit: 50,
+    });
+    mlyLayer.clearLayers();
+    for(const im of imgs){
+      const mk = L.circleMarker([im.lat, im.lon], {
+        radius: 5, weight: 1.5, color: '#fff', fillColor: '#37b24d', fillOpacity: 0.95,
+      }).addTo(mlyLayer);
+      const when = im.captured_at ? im.captured_at.slice(0, 10) : 'unknown date';
+      const head = im.compass_angle != null ? ` · heading ${Math.round(im.compass_angle)}°` : '';
+      mk.bindPopup(`<div style="width:280px">` +
+        (im.thumb_url ? `<img src="${im.thumb_url}" style="width:100%;border-radius:4px" alt="street-level photo">` : '') +
+        `<div style="font:11px monospace;margin-top:4px">${when}${head}${im.is_pano ? ' · 360°' : ''} · ` +
+        `<a href="https://www.mapillary.com/app/?focus=photo&pKey=${im.id}" target="_blank" rel="noopener">open</a></div></div>`,
+        { maxWidth: 300 });
+    }
+    setMsg(imgs.length
+      ? `${imgs.length} street-level photo(s) — click a green dot to preview.`
+      : 'No street-level photos found in this radius.');
+  }catch(err){
+    setMsg('Mapillary fetch failed: ' + err.message);
+  }finally{
+    btn.disabled = false; btn.textContent = 'Street-level photos (Mapillary)';
+  }
+};
+
+/* nearest street photo to a point, as agent-consumable blocks */
+async function agentStreetLevelView(lat, lon){
+  const imgs = await CalibExt.mapillary.fetchMapillaryImages({
+    lat, lon, radiusM: 100, token: mapillaryToken(), limit: 20,
+  });
+  if(!imgs.length) throw new Error('no street-level photos within 100 m of that point');
+  const d2 = i => (i.lat - lat)**2 + ((i.lon - lon) * Math.cos(lat * D2R))**2;
+  const best = imgs.sort((a, b) => d2(a) - d2(b))[0];
+  const meta = {
+    photo_lat: best.lat, photo_lon: best.lon,
+    compass_angle_deg: best.compass_angle, captured_at: best.captured_at, is_pano: best.is_pano,
+  };
+  try{
+    const resp = await fetch(best.thumb_url);
+    if(!resp.ok) throw new Error('HTTP ' + resp.status);
+    const blob = await resp.blob();
+    const dataUrl = await new Promise((ok, fail) => {
+      const rd = new FileReader();
+      rd.onload = () => ok(rd.result);
+      rd.onerror = () => fail(new Error('read failed'));
+      rd.readAsDataURL(blob);
+    });
+    return [
+      { type: 'image', data: dataUrl.split(',')[1], mimeType: blob.type || 'image/jpeg' },
+      { type: 'text', text: 'Nearest street-level photo (Mapillary). ' + JSON.stringify(meta) },
+    ];
+  }catch(_){
+    return { ...meta, thumb_url: best.thumb_url, note: 'photo could not be inlined — metadata only' };
+  }
+}
 
 /* snap a map click to the nearest landmark or building corner (screen px) */
 function snapLatLng(latlng){
@@ -2175,6 +2255,7 @@ function agentHost(){
     sam3Segment,
     wikiLookup,
     geoCalibSeed,
+    streetLevelView: agentStreetLevelView,
     setCameraPosition: agentSetCameraPosition,
     addPair: agentAddPair,
     removePair: agentRemovePair,
@@ -2234,6 +2315,8 @@ document.getElementById('btnAgentContinue').onclick = () => {
    ===================================================================== */
 const HF_TOKEN_KEY = 'ground-camera-calibrator.hfToken';
 function hfToken(){ return localStorage.getItem(HF_TOKEN_KEY) || ''; }
+const MLY_TOKEN_KEY = 'ground-camera-calibrator.mapillaryToken';
+function mapillaryToken(){ return localStorage.getItem(MLY_TOKEN_KEY) || ''; }
 const AGENT_MODEL_KEY = 'ground-camera-calibrator.agentModel';
 (function initAgentSettings(){
   const model = document.getElementById('agentModel');
@@ -2263,6 +2346,27 @@ const AGENT_MODEL_KEY = 'ground-camera-calibrator.agentModel';
     setMsg('HF token cleared.');
   };
   show();
+
+  const mlyInput = document.getElementById('mlyTokenInput');
+  const mlyStatus = document.getElementById('mlyTokenStatus');
+  const showMly = () => {
+    const t = mapillaryToken();
+    mlyInput.value = t;
+    mlyStatus.textContent = t ? `saved (…${t.slice(-4)})` : 'not set';
+  };
+  document.getElementById('btnSaveMlyToken').onclick = () => {
+    const t = mlyInput.value.trim();
+    if(!t) return setMsg('Token is empty — use Clear to remove the saved one.');
+    localStorage.setItem(MLY_TOKEN_KEY, t);
+    showMly();
+    setMsg('Mapillary token saved to this browser.');
+  };
+  document.getElementById('btnClearMlyToken').onclick = () => {
+    localStorage.removeItem(MLY_TOKEN_KEY);
+    showMly();
+    setMsg('Mapillary token cleared.');
+  };
+  showMly();
 })();
 
 /* =====================================================================

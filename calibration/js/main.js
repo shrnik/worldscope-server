@@ -9,12 +9,13 @@ import * as overpass from './api/overpass.js';
 import * as wikipedia from './api/wikipedia.js';
 import * as vlm from './api/vlm.js';
 import * as elevation from './api/elevation.js';
+import * as mapillary from './api/mapillary.js';
 import * as agentTools from './agent/tools.js';
 import * as agentRunner from './agent/runner.js';
 import * as agentPrompts from './agent/system-prompt.js';
 
 window.CalibExt = {
-  gradio, geocalib, sam3, overpass, wikipedia, vlm, elevation,
+  gradio, geocalib, sam3, overpass, wikipedia, vlm, elevation, mapillary,
   agent: { ...agentTools, ...agentRunner, ...agentPrompts },
   createAgentRunner: agentRunner.createAgentRunner,
 };
