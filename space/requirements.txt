@@ -1,6 +1,8 @@
 gradio>=5.0
 transformers>=4.46
 torch>=2.4
+# tipsv2's remote code needs the CamelCase sentencepiece API, removed in 0.2.1+
+sentencepiece==0.2.0
 numpy>=2.0
 pandas>=2.2
 pyarrow>=18.0

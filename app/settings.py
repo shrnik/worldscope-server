@@ -13,8 +13,8 @@ class Settings(BaseSettings):
     hf_cleanup_flavor: str = "cpu-basic"
     hf_job_timeout: str = "1h"
 
-    # CLIP model (same checkpoint used by the server and the job)
-    clip_model: str = "openai/clip-vit-base-patch16"
+    # Embedding model (same checkpoint used by the server, the embed job, and the Space)
+    embed_model: str = "google/tipsv2-b14"
 
     # Camera data sources
     sheet_url: str = (

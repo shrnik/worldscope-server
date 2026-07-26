@@ -1,7 +1,7 @@
 """Worldscope semantic image search — Hugging Face Space (Gradio).
 
 Self-contained search frontend:
-  - loads the CLIP text model (same checkpoint the embed job used),
+  - loads the TIPS v2 text tower (same checkpoint the embed job used),
   - pulls embeddings.parquet from the public storage bucket,
   - does brute-force cosine search in memory,
   - shows the matching camera snapshots (served via the bucket's public URLs).
@@ -20,33 +20,30 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import torch
-from transformers import CLIPModel, CLIPProcessor
+from transformers import AutoModel
 
 HF_BUCKET = os.environ.get("HF_BUCKET", "shrnik/worldscope")
 HF_ENDPOINT = os.environ.get("HF_ENDPOINT", "https://huggingface.co")
 EMBEDDINGS_PATH = os.environ.get("EMBEDDINGS_PATH", "embeddings.parquet")
-CLIP_MODEL = os.environ.get("CLIP_MODEL", "openai/clip-vit-base-patch16")
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "google/tipsv2-b14")
 TOP_K = int(os.environ.get("TOP_K", "100"))
 
 EMBEDDINGS_URL = f"{HF_ENDPOINT}/buckets/{HF_BUCKET}/resolve/{EMBEDDINGS_PATH}"
 
 # --- model -------------------------------------------------------------------
-_model = CLIPModel.from_pretrained(CLIP_MODEL).eval()
-_processor = CLIPProcessor.from_pretrained(CLIP_MODEL)
+_model = AutoModel.from_pretrained(EMBED_MODEL, trust_remote_code=True).eval()
 
 
 @torch.inference_mode()
 def embed_text(text: str) -> np.ndarray:
-    inputs = _processor(text=[text], return_tensors="pt", padding=True, truncation=True)
-    out = _model.get_text_features(**inputs)
-    feats = out if torch.is_tensor(out) else out.pooler_output  # v4 tensor / v5 object
-    vec = feats.cpu().numpy().astype(np.float32)[0]
+    # encode_text tokenizes internally and returns (1, dim).
+    vec = _model.encode_text([text]).cpu().numpy().astype(np.float32)[0]
     norm = np.linalg.norm(vec) or 1.0
     return vec / norm
 
 
 # --- index -------------------------------------------------------------------
-_embeddings = np.empty((0, 512), dtype=np.float32)
+_embeddings = np.empty((0, 768), dtype=np.float32)
 _meta: list[dict] = []
 
 

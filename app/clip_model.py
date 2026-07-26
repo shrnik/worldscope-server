@@ -1,37 +1,34 @@
-"""CLIP model wrapper.
+"""Text embedding model wrapper (filename is historical — the checkpoint is TIPS v2).
 
-Loads `openai/clip-vit-base-patch16` once and embeds text queries into the 512-dim
-space. The HF embed job (`jobs/embed_job.py`) embeds images with the same checkpoint,
-so text queries and image embeddings are directly comparable.
+Loads `google/tipsv2-b14` once and embeds text queries into the 768-dim space. The
+HF embed job (`jobs/embed_job.py`) embeds images with the same checkpoint, so text
+queries and image embeddings are directly comparable.
 """
 
 from __future__ import annotations
 
 import numpy as np
 import torch
-from transformers import CLIPModel, CLIPProcessor
+from transformers import AutoModel
 
 from app.settings import settings
 
-_model: CLIPModel | None = None
-_processor: CLIPProcessor | None = None
-_device = "cuda" if torch.cuda.is_available() else "cpu"
+_model: torch.nn.Module | None = None
 
 
 def load() -> None:
-    """Load the model + processor into memory. Idempotent."""
-    global _model, _processor
+    """Load the model into memory. Idempotent."""
+    global _model
     if _model is not None:
         return
-    _model = CLIPModel.from_pretrained(settings.clip_model).to(_device).eval()
-    _processor = CLIPProcessor.from_pretrained(settings.clip_model)
+    _model = AutoModel.from_pretrained(settings.embed_model, trust_remote_code=True).eval()
 
 
-def _ensure_loaded() -> tuple[CLIPModel, CLIPProcessor]:
-    if _model is None or _processor is None:
+def _ensure_loaded() -> torch.nn.Module:
+    if _model is None:
         load()
-    assert _model is not None and _processor is not None
-    return _model, _processor
+    assert _model is not None
+    return _model
 
 
 def _l2_normalize(vectors: np.ndarray) -> np.ndarray:
@@ -42,15 +39,8 @@ def _l2_normalize(vectors: np.ndarray) -> np.ndarray:
 
 @torch.inference_mode()
 def embed_text(text: str) -> np.ndarray:
-    """Return an L2-normalized 512-dim embedding for a text query."""
-    model, processor = _ensure_loaded()
-    inputs = processor(
-        text=[text], return_tensors="pt", padding=True, truncation=True
-    ).to(_device)
-    features = model.get_text_features(**inputs)
-    # transformers v5 returns an output object (pooler_output is the projected
-    # embedding); v4 returns the tensor directly.
-    if not torch.is_tensor(features):
-        features = features.pooler_output
-    vec = features.cpu().numpy().astype(np.float32)[0]
+    """Return an L2-normalized embedding for a text query."""
+    model = _ensure_loaded()
+    # encode_text tokenizes internally and returns (1, dim).
+    vec = model.encode_text([text]).cpu().numpy().astype(np.float32)[0]
     return _l2_normalize(vec[None, :])[0]

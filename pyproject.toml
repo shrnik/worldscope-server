@@ -15,6 +15,7 @@ dependencies = [
     "pillow>=11.0",
     "httpx>=0.28",
     "pydantic-settings>=2.6",
+    "sentencepiece==0.2.0",
 ]
 
 [tool.uv]

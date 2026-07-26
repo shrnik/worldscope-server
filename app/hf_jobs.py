@@ -65,7 +65,7 @@ def trigger_embedding_job() -> str:
         timeout=settings.hf_job_timeout,
         volumes=[_bucket_volume()],
         env={
-            "CLIP_MODEL": settings.clip_model,
+            "EMBED_MODEL": settings.embed_model,
             "MANIFEST_PATH": settings.manifest_path,
             "EMBEDDINGS_PATH": settings.embeddings_path,
         },
