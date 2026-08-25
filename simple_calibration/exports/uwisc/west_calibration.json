@@ -1,0 +1,228 @@
+{
+  "camera": "AOSS West",
+  "camera_model_type": "AXIS P1377-LE",
+  "image_size": [
+    2592,
+    1944
+  ],
+  "location": {
+    "lat_deg": 43.0766,
+    "lon_deg": -89.4075,
+    "alt_m": 270
+  },
+  "image_source": "https://metobs.ssec.wisc.edu/pub/cache/aoss/cameras/west/latest_orig.jpg",
+  "archive_pattern": "https://metobs.ssec.wisc.edu/pub/cache/aoss/cameras/west/img/YYYY/MM/DD/orig/HH_MM_08.trig+00.jpg",
+  "timezone_note": "Image timestamps are local time (CST=UTC-6 before Mar 8, CDT=UTC-5 after)",
+  "camera_params": {
+    "type": "pinhole_radial_distortion_6p",
+    "pointing_az_deg": 270.039,
+    "pointing_alt_deg": 13.385,
+    "roll_deg": 1.305,
+    "f_px": 1504.7,
+    "cx_px": 1296.0,
+    "cy_px": 972.0,
+    "k1": -0.21099,
+    "k2": 0.06524,
+    "projection_note": "6-param model: fx=fy=f, cx=cy=image_center. ENU world frame. R = [right; -cam_up_rolled; forward]. px = f*xn*d + cx with d=1+k1*r2+k2*r2^2."
+  },
+  "calibration": {
+    "method": "star_planet_detection + least_squares_6param (fx=fy, cx=cy=center)",
+    "dates": [
+      "2026-02-25 23:30 CST",
+      "2026-03-28 01:00 CDT",
+      "2026-03-30 02:00 CDT"
+    ],
+    "objects_used": [
+      "Sirius (-1.4)",
+      "Procyon (0.4)",
+      "Betelgeuse (0.5)",
+      "Rigel (0.2)",
+      "Capella (0.1)",
+      "Aldebaran (0.9)",
+      "Jupiter (-2.1/-2.3)",
+      "Pollux (1.2)",
+      "Castor (1.6)"
+    ],
+    "n_total_observations": 15,
+    "rms_error_px": 2.62,
+    "max_error_px": 8.6,
+    "note": "6-param model (no skew, fx=fy). Slight degradation from 9-param (1.62px) but more constrained."
+  },
+  "calibrated_region": {
+    "az_range_deg": [
+      227,
+      315
+    ],
+    "alt_range_deg": [
+      -5,
+      50
+    ],
+    "note": "Full FOV coverage from stars detected at all corners. Sirius at left edge (az=227\u00b0), Capella at right (az=299-315\u00b0), Procyon at top (alt=42\u00b0), Rigel near bottom (alt=9\u00b0)."
+  },
+  "hfov_deg_approx": 82.0,
+  "vfov_deg_approx": 66.6,
+  "star_table": [
+    {
+      "name": "Moon",
+      "image": "Feb25_2330",
+      "az_deg": 272.83,
+      "alt_deg": 40.25,
+      "det_x": 1392.0,
+      "det_y": 266.0,
+      "peak": 22.6
+    },
+    {
+      "name": "Sirius",
+      "image": "Feb25_2330",
+      "az_deg": 227.34,
+      "alt_deg": 16.0,
+      "det_x": 148.0,
+      "det_y": 763.0,
+      "peak": 120.8
+    },
+    {
+      "name": "Procyon",
+      "image": "Feb25_2330",
+      "az_deg": 228.19,
+      "alt_deg": 41.66,
+      "det_x": 400.0,
+      "det_y": 3.0,
+      "peak": 61.0
+    },
+    {
+      "name": "Betelgeuse",
+      "image": "Feb25_2330",
+      "az_deg": 254.13,
+      "alt_deg": 26.77,
+      "det_x": 926.0,
+      "det_y": 589.0,
+      "peak": 45.4
+    },
+    {
+      "name": "Rigel",
+      "image": "Feb25_2330",
+      "az_deg": 250.35,
+      "alt_deg": 8.58,
+      "det_x": 776.0,
+      "det_y": 1068.0,
+      "peak": 33.6
+    },
+    {
+      "name": "Capella",
+      "image": "Feb25_2330",
+      "az_deg": 298.95,
+      "alt_deg": 42.01,
+      "det_x": 1927.0,
+      "det_y": 136.0,
+      "peak": 66.9
+    },
+    {
+      "name": "Aldebaran",
+      "image": "Feb25_2330",
+      "az_deg": 275.6,
+      "alt_deg": 18.62,
+      "det_x": 1441.0,
+      "det_y": 834.0,
+      "peak": 30.6
+    },
+    {
+      "name": "Jupiter",
+      "image": "Mar28_0100",
+      "az_deg": 280.5,
+      "alt_deg": 23.0,
+      "det_x": 1560.0,
+      "det_y": 715.0,
+      "peak": 139.9
+    },
+    {
+      "name": "Moon",
+      "image": "Mar28_0100",
+      "az_deg": 261.08,
+      "alt_deg": 39.1,
+      "det_x": 1101.0,
+      "det_y": 288.0,
+      "peak": 23.3
+    },
+    {
+      "name": "Procyon",
+      "image": "Mar28_0100",
+      "az_deg": 260.67,
+      "alt_deg": 17.33,
+      "det_x": 1065.0,
+      "det_y": 855.0,
+      "peak": 46.0
+    },
+    {
+      "name": "Pollux",
+      "image": "Mar28_0100",
+      "az_deg": 279.03,
+      "alt_deg": 33.11,
+      "det_x": 1514.0,
+      "det_y": 445.0,
+      "peak": 35.1
+    },
+    {
+      "name": "Castor",
+      "image": "Mar28_0100",
+      "az_deg": 284.41,
+      "alt_deg": 33.39,
+      "det_x": 1636.0,
+      "det_y": 430.0,
+      "peak": 29.7
+    },
+    {
+      "name": "Capella",
+      "image": "Mar28_0100",
+      "az_deg": 314.82,
+      "alt_deg": 20.32,
+      "det_x": 2482.0,
+      "det_y": 674.0,
+      "peak": 66.6
+    },
+    {
+      "name": "Jupiter",
+      "image": "Mar30_0200",
+      "az_deg": 291.04,
+      "alt_deg": 11.18,
+      "det_x": 1845.0,
+      "det_y": 1020.0,
+      "peak": 98.2
+    },
+    {
+      "name": "Procyon",
+      "image": "Mar30_0200",
+      "az_deg": 272.48,
+      "alt_deg": 5.06,
+      "det_x": 1358.0,
+      "det_y": 1190.0,
+      "peak": 10.9
+    },
+    {
+      "name": "Pollux",
+      "image": "Mar30_0200",
+      "az_deg": 289.15,
+      "alt_deg": 21.09,
+      "det_x": 1778.0,
+      "det_y": 754.0,
+      "peak": 24.0
+    },
+    {
+      "name": "Castor",
+      "image": "Mar30_0200",
+      "az_deg": 293.94,
+      "alt_deg": 21.68,
+      "det_x": 1898.0,
+      "det_y": 728.0,
+      "peak": 20.8
+    },
+    {
+      "name": "Moon",
+      "image": "Mar30_0200",
+      "az_deg": 243.03,
+      "alt_deg": 37.59,
+      "det_x": 692.0,
+      "det_y": 274.0,
+      "peak": 15.5
+    }
+  ]
+}

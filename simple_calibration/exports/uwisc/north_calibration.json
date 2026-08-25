@@ -1,0 +1,157 @@
+{
+  "camera": "AOSS North",
+  "image_size": [
+    2592,
+    1944
+  ],
+  "method": "stellar_streaks",
+  "timestamp_utc": "2025-12-04T06:09:00",
+  "location": {
+    "lat_deg": 43.070830682998924,
+    "lon_deg": -89.40680020107243,
+    "note": "User-specified GPS. Elevation not constrained (stars at infinity)."
+  },
+  "camera_params": {
+    "type": "pinhole_radial_simple",
+    "f_px": 2135.2,
+    "cx_px": 1296.0,
+    "cy_px": 972.0,
+    "pointing_az_deg": 0.85,
+    "pointing_alt_deg": 11.18,
+    "roll_deg": 0.92,
+    "k1": -0.345499,
+    "k2": 0.105347
+  },
+  "calibration": {
+    "n_stars": 11,
+    "star_rms_px": 3.7,
+    "star_median_px": 2.3,
+    "star_max_px": 7.9,
+    "star_max_name": "Chi Dra",
+    "polaris_pred_px": [
+      1273.6,
+      -220.8
+    ],
+    "polaris_obs_px": [
+      1289,
+      -269
+    ],
+    "polaris_err_px": 50.6,
+    "polaris_note": "Polaris 269px above frame \u2014 distortion model extrapolation unreliable there",
+    "hfov_deg": 62.5,
+    "vfov_deg": 49.0
+  },
+  "star_matches": [
+    {
+      "name": "Alderamin",
+      "az_deg": 332.42,
+      "alt_deg": 27.13,
+      "obs_x": 367.5,
+      "obs_y": 300.5,
+      "pred_x": 368.2,
+      "pred_y": 302.3,
+      "err_px": 1.9
+    },
+    {
+      "name": "Alfirk",
+      "az_deg": 338.74,
+      "alt_deg": 33.03,
+      "obs_x": 613.5,
+      "obs_y": 116.5,
+      "pred_x": 612.4,
+      "pred_y": 112.1,
+      "err_px": 4.5
+    },
+    {
+      "name": "Delta Dra",
+      "az_deg": 347.34,
+      "alt_deg": 23.34,
+      "obs_x": 834.5,
+      "obs_y": 495.5,
+      "pred_x": 839.2,
+      "pred_y": 497.9,
+      "err_px": 5.3
+    },
+    {
+      "name": "Chi Dra",
+      "az_deg": 353.76,
+      "alt_deg": 26.57,
+      "obs_x": 1074.0,
+      "obs_y": 394.5,
+      "pred_x": 1066.6,
+      "pred_y": 391.6,
+      "err_px": 7.9
+    },
+    {
+      "name": "Zeta Dra",
+      "az_deg": 359.55,
+      "alt_deg": 18.79,
+      "obs_x": 1253.0,
+      "obs_y": 687.0,
+      "pred_x": 1254.6,
+      "pred_y": 687.7,
+      "err_px": 1.7
+    },
+    {
+      "name": "Eta Dra",
+      "az_deg": 4.99,
+      "alt_deg": 14.91,
+      "obs_x": 1446.0,
+      "obs_y": 832.5,
+      "pred_x": 1447.4,
+      "pred_y": 834.3,
+      "err_px": 2.3
+    },
+    {
+      "name": "Pherkad",
+      "az_deg": 8.77,
+      "alt_deg": 26.37,
+      "obs_x": 1569.5,
+      "obs_y": 406.5,
+      "pred_x": 1572.1,
+      "pred_y": 406.2,
+      "err_px": 2.6
+    },
+    {
+      "name": "Alkaid",
+      "az_deg": 30.33,
+      "alt_deg": 11.95,
+      "obs_x": 2361.0,
+      "obs_y": 903.0,
+      "pred_x": 2359.3,
+      "pred_y": 905.2,
+      "err_px": 2.9
+    },
+    {
+      "name": "Mizar",
+      "az_deg": 29.85,
+      "alt_deg": 18.61,
+      "obs_x": 2315.5,
+      "obs_y": 653.5,
+      "pred_x": 2314.9,
+      "pred_y": 652.2,
+      "err_px": 1.4
+    },
+    {
+      "name": "Alioth",
+      "az_deg": 32.48,
+      "alt_deg": 22.21,
+      "obs_x": 2382.0,
+      "obs_y": 507.5,
+      "pred_x": 2381.1,
+      "pred_y": 505.6,
+      "err_px": 2.1
+    },
+    {
+      "name": "Kochab",
+      "az_deg": 9.95,
+      "alt_deg": 29.38,
+      "obs_x": 1606.0,
+      "obs_y": 292.0,
+      "pred_x": 1606.4,
+      "pred_y": 293.7,
+      "err_px": 1.7
+    }
+  ],
+  "notes": "Dec 4, 2025 star streak calibration from max projection of 107 frames (00:00-00:18 CST). Chi Dra RA corrected from 268.382 to 275.263. Stars only (no Polaris in cost). Polaris extrapolation shows 50px error due to out-of-frame distortion."
+}

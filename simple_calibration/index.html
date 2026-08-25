@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Simple Calibration</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body { display: flex; height: 100vh; font: 13px/1.4 system-ui, sans-serif;
+         background: #14161a; color: #d8dbe0; }
+  aside { width: 380px; min-width: 380px; overflow-y: auto; padding: 14px;
+          background: #1b1e24; border-right: 1px solid #2a2e36; }
+  main { flex: 1; position: relative; overflow: hidden; }
+  canvas { position: absolute; inset: 0; cursor: crosshair; }
+  h1 { font-size: 15px; margin-bottom: 10px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+       color: #8b93a1; margin: 16px 0 6px; }
+  input, button, select { font: inherit; color: inherit; background: #23272f;
+                  border: 1px solid #363c48; border-radius: 4px; padding: 4px 6px; }
+  input:focus { outline: 1px solid #4d7fd6; }
+  button { cursor: pointer; }
+  button:hover { background: #2c313b; }
+  button.primary { background: #2b5cb8; border-color: #2b5cb8; font-weight: 600; }
+  button.primary:hover { background: #356fd8; }
+  button:disabled { opacity: .45; cursor: default; }
+  .row { display: flex; gap: 6px; margin-bottom: 6px; }
+  .row input { flex: 1; min-width: 0; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 2px 3px; text-align: left; font-size: 12px; }
+  th { color: #8b93a1; font-weight: 500; }
+  td input { width: 100%; padding: 2px 4px; font-size: 12px; }
+  tr.sel td { background: #2a3040; }
+  td.xy { color: #9aa3b2; white-space: nowrap; }
+  td.err { white-space: nowrap; }
+  .del { border: none; background: none; color: #c2564f; padding: 0 4px; }
+  #status { margin-top: 8px; min-height: 2.6em; font-size: 12px; color: #8b93a1;
+            white-space: pre-wrap; }
+  #status.err { color: #e07a73; }
+  #results { display: none; margin-top: 6px; }
+  #results dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; }
+  #results dt { color: #8b93a1; }
+  #results dd { font-variant-numeric: tabular-nums; }
+  #rms { font-size: 16px; font-weight: 700; color: #6fcf7a; }
+  #coords { position: absolute; left: 8px; bottom: 8px; padding: 2px 8px;
+            background: #1b1e24cc; border-radius: 4px; font-size: 12px;
+            font-variant-numeric: tabular-nums; pointer-events: none; }
+  .hint { font-size: 11px; color: #6b7280; margin-top: 4px; }
+  .seed { font-size: 12px; color: #b9a35c; margin-top: 4px; }
+</style>
+</head>
+<body>
+<aside>
+  <h1>Simple Calibration</h1>
+
+  <h2>Image</h2>
+  <div class="row">
+    <input id="imgUrl" placeholder="Image URL" spellcheck="false">
+    <button id="loadUrl">Load</button>
+  </div>
+  <div class="row">
+    <select id="localImgs" style="flex:1;min-width:0"></select>
+    <button id="refreshImgs" title="Rescan the images/ folder">⟳</button>
+  </div>
+  <div class="row"><input id="imgFile" type="file" accept="image/*"></div>
+  <div class="hint" id="imgInfo">No image loaded.</div>
+
+  <h2>Camera</h2>
+  <div class="row"><input id="camName" placeholder="camera name (used for exports)" spellcheck="false"></div>
+  <div class="row">
+    <input id="camLat" type="number" step="any" placeholder="lat">
+    <input id="camLon" type="number" step="any" placeholder="lon">
+    <input id="camAlt" type="number" step="any" placeholder="alt (m)">
+  </div>
+  <div class="hint">Where the camera sits — this is the ENU origin, separate from the clicked points.</div>
+
+  <h2>Points</h2>
+  <table id="ptTable">
+    <thead><tr><th title="include in calibration">✓</th><th>#</th><th>x, y</th><th>lat</th><th>lon</th><th>alt</th><th>err</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <div class="hint">Click the image to add a point. Drag a marker to move it — a magnifier appears for precise placement. Right-click a marker to delete it; arrow keys nudge the selected point (Shift = 10&nbsp;px). Scroll to zoom, drag empty space to pan. Paste coordinates (e.g. 42°22'57.82"N 71°03'19.93"W or 42.38, -71.06) into any lat/lon field — or anywhere with a point selected — to fill them.</div>
+
+  <h2>Calibrate</h2>
+  <div class="row">
+    <button id="geoBtn">GeoCalib seed</button>
+    <button id="calBtn" class="primary" style="flex:1">Calibrate</button>
+  </div>
+  <div class="seed" id="seedInfo"></div>
+  <div id="status"></div>
+
+  <div id="results">
+    <h2>Results</h2>
+    <dl>
+      <dt>RMS error</dt><dd id="rms"></dd>
+      <dt>HFOV / VFOV</dt><dd id="fov"></dd>
+      <dt>Focal</dt><dd id="focal"></dd>
+      <dt>Pan / Tilt / Roll</dt><dd id="ptr"></dd>
+      <dt>Distortion k1 / k2 / k3</dt><dd id="dist"></dd>
+      <dt>Cam offset (ENU)</dt><dd id="off"></dd>
+    </dl>
+    <label class="hint" style="display:block;margin-top:6px">
+      <input type="checkbox" id="showHz" checked> show eye-level horizon lines (amber = GeoCalib seed, cyan = calibrated)
+    </label>
+    <div class="row" style="margin-top:8px">
+      <button id="dlBtn">Download camera_params.json</button>
+      <button id="bundleBtn" class="primary">Export bundle</button>
+    </div>
+  </div>
+
+  <h2>Project</h2>
+  <div class="row">
+    <button id="expBtn">Export points</button>
+    <button id="impBtn">Import points</button>
+    <button id="clrBtn">Clear</button>
+    <input id="impFile" type="file" accept=".json" hidden>
+  </div>
+</aside>
+
+<main>
+  <canvas id="cv"></canvas>
+  <div id="coords"></div>
+</main>
+
+<script>
+'use strict';
+const API = (location.protocol.startsWith('http') && location.port === '8001')
+  ? '' : 'http://127.0.0.1:8001';
+const $ = id => document.getElementById(id);
+const cv = $('cv'), ctx = cv.getContext('2d');
+
+const state = {
+  img: null, imgBlob: null, imgUrl: '',
+  points: [],           // {x, y, lat, lon, alt, estX, estY, err}
+  sel: -1,
+  view: { scale: 1, ox: 0, oy: 0 },
+  result: null,
+  seed: null,           // {hfov, focal, source}
+};
+
+/* ---------- persistence ---------- */
+const LS_KEY = 'simple_calibration_v1';
+function save(){
+  localStorage.setItem(LS_KEY, JSON.stringify({
+    imgUrl: state.imgUrl,
+    name: $('camName').value,
+    cam: { lat: $('camLat').value, lon: $('camLon').value, alt: $('camAlt').value },
+    points: state.points.map(p => ({ x: p.x, y: p.y, lat: p.lat, lon: p.lon, alt: p.alt,
+                                     use: p.use !== false, estX: p.estX, estY: p.estY, err: p.err })),
+    seed: state.seed,
+    result: state.result,
+  }));
+}
+function restore(){
+  let s; try { s = JSON.parse(localStorage.getItem(LS_KEY)); } catch { return; }
+  if (!s) return;
+  $('camLat').value = s.cam?.lat ?? ''; $('camLon').value = s.cam?.lon ?? '';
+  $('camAlt').value = s.cam?.alt ?? '';
+  $('camName').value = s.name ?? '';
+  state.points = (s.points || []).map(p => ({ estX: null, estY: null, err: null, ...p }));
+  if (s.seed){ state.seed = s.seed; $('seedInfo').textContent = s.seed.label || ''; }
+  if (s.result){ state.result = s.result; showResults(s.result); }
+  let localName = null;
+  if (s.imgUrl){
+    if (s.imgUrl.startsWith('local:')) {
+      localName = s.imgUrl.slice(6);
+      loadLocal(localName);
+    } else {
+      $('imgUrl').value = s.imgUrl;
+      loadFromUrl(s.imgUrl);
+    }
+  }
+  renderTable();
+  return localName;
+}
+
+/* ---------- image loading ---------- */
+function setStatus(msg, isErr){
+  $('status').textContent = msg || '';
+  $('status').className = isErr ? 'err' : '';
+}
+async function loadFromUrl(url){
+  setStatus('Loading image…');
+  try {
+    const r = await fetch(`${API}/proxy?url=${encodeURIComponent(url)}`);
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+    useBlob(await r.blob(), url);
+  } catch (e) { setStatus('Image load failed: ' + e.message, true); }
+}
+function useBlob(blob, url){
+  const img = new Image();
+  img.onload = () => {
+    state.img = img; state.imgBlob = blob; state.imgUrl = url || '';
+    $('imgInfo').textContent = `${img.naturalWidth} × ${img.naturalHeight}`;
+    fitView(); setStatus(''); save(); draw();
+  };
+  img.onerror = () => setStatus('Could not decode image.', true);
+  img.src = URL.createObjectURL(blob);
+}
+async function loadLocal(name){
+  setStatus('Loading image…');
+  try {
+    const r = await fetch(`${API}/images/${encodeURIComponent(name)}`);
+    if (!r.ok) throw new Error(r.statusText);
+    useBlob(await r.blob(), 'local:' + name);
+  } catch (e) { setStatus('Image load failed: ' + e.message, true); }
+}
+async function refreshLocalImages(selected){
+  const sel = $('localImgs');
+  sel.innerHTML = '';
+  sel.add(new Option('— images/ folder —', ''));
+  try {
+    const names = await (await fetch(`${API}/images_list`)).json();
+    names.forEach(n => sel.add(new Option(n, n)));
+    if (selected && names.includes(selected)) sel.value = selected;
+  } catch { /* server down — dropdown stays empty */ }
+}
+$('localImgs').onchange = () => { const n = $('localImgs').value; if (n) loadLocal(n); };
+$('refreshImgs').onclick = () => refreshLocalImages($('localImgs').value);
+$('loadUrl').onclick = () => { const u = $('imgUrl').value.trim(); if (u) loadFromUrl(u); };
+$('imgUrl').onkeydown = e => { if (e.key === 'Enter') $('loadUrl').click(); };
+$('imgFile').onchange = e => { const f = e.target.files[0]; if (f) useBlob(f, ''); };
+
+/* ---------- view / canvas ---------- */
+function fitView(){
+  if (!state.img) return;
+  const s = Math.min(cv.width / state.img.naturalWidth, cv.height / state.img.naturalHeight);
+  state.view = { scale: s,
+    ox: (cv.width - state.img.naturalWidth * s) / 2,
+    oy: (cv.height - state.img.naturalHeight * s) / 2 };
+}
+function resize(){
+  cv.width = cv.parentElement.clientWidth;
+  cv.height = cv.parentElement.clientHeight;
+  draw();
+}
+window.addEventListener('resize', resize);
+
+const toScreen = (x, y) => [x * state.view.scale + state.view.ox, y * state.view.scale + state.view.oy];
+const toImage  = (sx, sy) => [(sx - state.view.ox) / state.view.scale, (sy - state.view.oy) / state.view.scale];
+
+function draw(){
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  if (!state.img) {
+    ctx.fillStyle = '#3a404c'; ctx.font = '14px system-ui'; ctx.textAlign = 'center';
+    ctx.fillText('Load an image to start', cv.width / 2, cv.height / 2);
+    return;
+  }
+  const v = state.view;
+  ctx.imageSmoothingEnabled = v.scale < 1;
+  ctx.setTransform(v.scale, 0, 0, v.scale, v.ox, v.oy);
+  ctx.drawImage(state.img, 0, 0);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+  if ($('showHz').checked) drawHorizons();
+
+  state.points.forEach((p, i) => {
+    const [sx, sy] = toScreen(p.x, p.y);
+    // reprojection feedback: line + green cross (dimmed for held-out points)
+    if (p.estX != null) {
+      ctx.globalAlpha = p.use === false ? 0.55 : 1;
+      const [ex, ey] = toScreen(p.estX, p.estY);
+      ctx.strokeStyle = '#e0b84f'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
+      ctx.strokeStyle = '#5ad06a'; ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(ex - 6, ey - 6); ctx.lineTo(ex + 6, ey + 6);
+      ctx.moveTo(ex - 6, ey + 6); ctx.lineTo(ex + 6, ey - 6);
+      ctx.stroke();
+      if (p.err != null) {
+        ctx.fillStyle = '#5ad06a'; ctx.font = '11px system-ui'; ctx.textAlign = 'left';
+        ctx.fillText(p.err.toFixed(1) + 'px', ex + 9, ey - 8);
+      }
+      ctx.globalAlpha = 1;
+    }
+    ctx.beginPath(); ctx.arc(sx, sy, 5, 0, 7);
+    ctx.fillStyle = p.use === false ? '#6b7280' : '#e0524a';   // grey = excluded
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = i === state.sel ? '#ffd75e' : (p.use === false ? '#9aa3b2' : '#fff');
+    ctx.stroke();
+    if (i === hover && !(drag && drag.mode === 'point')) {
+      ctx.beginPath(); ctx.arc(sx, sy, 9, 0, 7);
+      ctx.strokeStyle = '#ffd75e88'; ctx.lineWidth = 2; ctx.stroke();
+    }
+    ctx.fillStyle = '#fff'; ctx.font = 'bold 11px system-ui'; ctx.textAlign = 'left';
+    ctx.fillText(String(i + 1), sx + 8, sy + 4);
+  });
+
+  if (drag && drag.mode === 'point') drawLoupe(state.points[drag.idx]);
+}
+
+/* eye-level (0° elevation) lines — height checks tilt, slope checks roll.
+   Drawn for the GeoCalib seed (pan-independent: pitch/roll/focal suffice)
+   and for the final calibrated model. */
+function calibModel(){
+  const cp = state.result.camera_params;
+  return { R: cp.rotation,
+           fx: cp.intrinsics[0][0], fy: cp.intrinsics[1][1],
+           cx: cp.intrinsics[0][2], cy: cp.intrinsics[1][2],
+           D: cp.distortion, tilt: state.result.tilt_deg };
+}
+function horizonModels(){
+  const out = [];
+  if (state.seed && state.seed.pitch_deg != null && state.seed.focal)
+    out.push([seedModel(), '#e0a54f', 'eye level — GeoCalib seed', 20]);
+  if (state.result)
+    out.push([calibModel(), '#4fc3e0', 'eye level — calibrated', 36]);
+  return out;
+}
+function drawHorizons(){
+  for (const [m, color, text, msgY] of horizonModels())
+    drawHorizonCurve(m, color, text, msgY);
+}
+
+/* ENU->cam rotation from GeoCalib pitch/roll (pan set to 0 — the horizon
+   curve is the same for every pan) */
+function seedModel(){
+  const s = state.seed;
+  const t = (s.pitch_deg || 0) * Math.PI / 180, r = (s.roll_deg || 0) * Math.PI / 180;
+  const fwd = [0, Math.cos(t), Math.sin(t)];
+  const right = [Math.cos(r), -Math.sin(r) * Math.sin(t), Math.sin(r) * Math.cos(t)];
+  const down = [
+    fwd[1] * right[2] - fwd[2] * right[1],
+    fwd[2] * right[0] - fwd[0] * right[2],
+    fwd[0] * right[1] - fwd[1] * right[0],
+  ];
+  return { R: [right, down, fwd], fx: s.focal, fy: s.focal,
+           cx: state.img.naturalWidth / 2, cy: state.img.naturalHeight / 2,
+           D: [s.k1 || 0, 0, 0, 0, 0], tilt: s.pitch_deg || 0 };
+}
+
+/* horizon polyline segments in image coordinates */
+function horizonSegments(m){
+  const { R, fx, fy, cx, cy, D } = m;
+  const [k1, k2, p1, p2, k3] = D;
+  const W = state.img.naturalWidth, H = state.img.naturalHeight;
+
+  // Only draw where the distortion polynomial is trustworthy: within the
+  // radius the frame actually covers (nothing beyond it constrained the fit —
+  // extrapolating an overfit polynomial there bends the line into circles),
+  // and before the polynomial folds back (barrel-distortion wrap-around).
+  const r2frame = ((cx * 1.15) ** 2 + (cy * 1.15) ** 2) / (fx * fy);
+  let r2max = Math.min(1.44, Math.max(r2frame, 0.05));
+  for (let r2 = 0.02; r2 <= r2max; r2 += 0.02) {
+    if (1 + 3 * k1 * r2 + 5 * k2 * r2 * r2 + 7 * k3 * r2 * r2 * r2 <= 0) {
+      r2max = r2 - 0.02;
+      break;
+    }
+  }
+
+  const segs = [];
+  let cur = null;
+  for (let az = 0; az <= 360; az += 0.2) {
+    const a = az * Math.PI / 180;
+    const d = [Math.sin(a), Math.cos(a), 0];             // ENU direction, elevation 0
+    const zc = R[2][0] * d[0] + R[2][1] * d[1] + R[2][2] * d[2];
+    let pt = null;
+    if (zc > 0.05) {
+      const x = (R[0][0] * d[0] + R[0][1] * d[1] + R[0][2] * d[2]) / zc;
+      const y = (R[1][0] * d[0] + R[1][1] * d[1] + R[1][2] * d[2]) / zc;
+      const r2 = x * x + y * y;
+      if (r2 < r2max) {
+        const rad = 1 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2;
+        const px = fx * (x * rad + 2 * p1 * x * y + p2 * (r2 + 2 * x * x)) + cx;
+        const py = fy * (y * rad + p1 * (r2 + 2 * y * y) + 2 * p2 * x * y) + cy;
+        if (px > -0.2 * W && px < 1.2 * W && py > -0.2 * H && py < 1.2 * H) pt = [px, py];
+      }
+    }
+    if (pt) { if (!cur) { cur = []; segs.push(cur); } cur.push(pt); }
+    else cur = null;
+  }
+  return segs;
+}
+
+function drawHorizonCurve(m, color, text, msgY){
+  const segs = horizonSegments(m);
+  ctx.save();
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.setLineDash([8, 6]);
+  let label = null;
+  for (const seg of segs) {
+    if (seg.length < 2) continue;
+    ctx.beginPath();
+    seg.forEach(([px, py], i) => {
+      const [sx, sy] = toScreen(px, py);
+      i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy);
+      if (!label && sx > 8 && sx < cv.width - 150 && sy > 26 && sy < cv.height - 18) label = [sx, sy];
+    });
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.fillStyle = color;
+  if (label) {
+    ctx.font = '11px system-ui'; ctx.textAlign = 'left';
+    // seed label above its line, calibrated below, so they don't collide
+    ctx.fillText(text, label[0] + 4, label[1] + (msgY === 20 ? -6 : 13));
+  } else if (!segs.some(s => s.length > 1)) {
+    const t = m.tilt;
+    ctx.font = '12px system-ui'; ctx.textAlign = 'center';
+    ctx.fillText(`${text} is outside the frame — tilt ${t.toFixed(1)}°, ` +
+      `${t < 0 ? 'above the top edge' : 'below the bottom edge'}`, cv.width / 2, msgY);
+  }
+  ctx.restore();
+}
+
+/* magnifier shown while dragging a point, for pixel-precise placement */
+function drawLoupe(p){
+  const R = 80, zoom = Math.max(state.view.scale * 4, 6);
+  const [sx, sy] = toScreen(p.x, p.y);
+  let lx = sx + R + 40, ly = sy - R - 40;
+  if (lx + R > cv.width)  lx = sx - R - 40;
+  if (ly - R < 0)         ly = sy + R + 40;
+
+  ctx.save();
+  ctx.beginPath(); ctx.arc(lx, ly, R, 0, 7); ctx.clip();
+  ctx.fillStyle = '#000'; ctx.fillRect(lx - R, ly - R, 2 * R, 2 * R);
+  ctx.setTransform(zoom, 0, 0, zoom, lx - p.x * zoom, ly - p.y * zoom);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(state.img, 0, 0);
+  ctx.restore();
+
+  ctx.beginPath(); ctx.arc(lx, ly, R, 0, 7);
+  ctx.strokeStyle = '#ffd75e'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.strokeStyle = '#ffd75ecc'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(lx - R, ly); ctx.lineTo(lx - 6, ly); ctx.moveTo(lx + 6, ly); ctx.lineTo(lx + R, ly);
+  ctx.moveTo(lx, ly - R); ctx.lineTo(lx, ly - 6); ctx.moveTo(lx, ly + 6); ctx.lineTo(lx, ly + R);
+  ctx.stroke();
+  ctx.fillStyle = '#ffd75e'; ctx.font = '11px system-ui'; ctx.textAlign = 'center';
+  ctx.fillText(`${p.x.toFixed(1)}, ${p.y.toFixed(1)}`, lx, ly + R + 14);
+}
+
+/* ---------- interaction ---------- */
+let drag = null;  // {mode:'pan'|'point', idx, sx, sy, moved, offX, offY}
+let hover = -1;   // point index under the cursor
+function hitPoint(sx, sy){
+  for (let i = state.points.length - 1; i >= 0; i--) {
+    const [px, py] = toScreen(state.points[i].x, state.points[i].y);
+    if (Math.hypot(px - sx, py - sy) < 12) return i;
+  }
+  return -1;
+}
+function touchPoint(p){
+  p.estX = p.estY = p.err = null;
+  p.x = Math.min(Math.max(p.x, 0), state.img ? state.img.naturalWidth : p.x);
+  p.y = Math.min(Math.max(p.y, 0), state.img ? state.img.naturalHeight : p.y);
+}
+cv.onmousedown = e => {
+  if (e.button !== 0) return;
+  const idx = hitPoint(e.offsetX, e.offsetY);
+  drag = { mode: idx >= 0 ? 'point' : 'pan', idx, sx: e.offsetX, sy: e.offsetY, moved: false };
+  if (idx >= 0) {
+    // remember where inside the marker we grabbed it, so it doesn't jump
+    const [ix, iy] = toImage(e.offsetX, e.offsetY);
+    drag.offX = state.points[idx].x - ix;
+    drag.offY = state.points[idx].y - iy;
+    state.sel = idx;
+    cv.style.cursor = 'grabbing';
+    renderTable(); draw();
+  }
+};
+cv.onmousemove = e => {
+  if (state.img) {
+    const [ix, iy] = toImage(e.offsetX, e.offsetY);
+    $('coords').textContent = `x ${ix.toFixed(1)}  y ${iy.toFixed(1)}`;
+  }
+  if (!drag) {
+    const h = hitPoint(e.offsetX, e.offsetY);
+    if (h !== hover) {
+      hover = h;
+      cv.style.cursor = h >= 0 ? 'grab' : 'crosshair';
+      draw();
+    }
+    return;
+  }
+  const dx = e.offsetX - drag.sx, dy = e.offsetY - drag.sy;
+  if (Math.hypot(dx, dy) > 3) drag.moved = true;
+  if (!drag.moved) return;
+  if (drag.mode === 'pan') {
+    state.view.ox += dx; state.view.oy += dy;
+    drag.sx = e.offsetX; drag.sy = e.offsetY;
+  } else {
+    const p = state.points[drag.idx];
+    const [ix, iy] = toImage(e.offsetX, e.offsetY);
+    p.x = ix + drag.offX; p.y = iy + drag.offY;
+    touchPoint(p);
+    renderTable();
+  }
+  draw();
+};
+window.addEventListener('mouseup', e => {
+  if (!drag || e.button !== 0) return;
+  if (!drag.moved) {
+    if (drag.mode === 'pan' && state.img) {
+      const [ix, iy] = toImage(drag.sx, drag.sy);
+      if (ix >= 0 && iy >= 0 && ix <= state.img.naturalWidth && iy <= state.img.naturalHeight) {
+        state.points.push({ x: ix, y: iy, lat: '', lon: '', alt: '', estX: null, estY: null, err: null });
+        state.sel = state.points.length - 1;
+        save();
+      }
+    }
+    renderTable();
+  }
+  if (drag.mode === 'point') save();
+  drag = null;
+  hover = hitPoint(e.offsetX, e.offsetY);
+  cv.style.cursor = hover >= 0 ? 'grab' : 'crosshair';
+  draw();
+});
+cv.oncontextmenu = e => {
+  e.preventDefault();
+  const idx = hitPoint(e.offsetX, e.offsetY);
+  if (idx >= 0) {
+    state.points.splice(idx, 1);
+    if (state.sel === idx) state.sel = -1;
+    else if (state.sel > idx) state.sel--;
+    hover = -1;
+    renderTable(); save(); draw();
+  }
+};
+cv.onwheel = e => {
+  e.preventDefault();
+  const f = Math.exp(-e.deltaY * 0.0015);
+  const v = state.view;
+  const ns = Math.min(Math.max(v.scale * f, 0.02), 64);
+  v.ox = e.offsetX - (e.offsetX - v.ox) * (ns / v.scale);
+  v.oy = e.offsetY - (e.offsetY - v.oy) * (ns / v.scale);
+  v.scale = ns;
+  draw();
+};
+const NUDGE = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+window.addEventListener('keydown', e => {
+  if (document.activeElement.tagName === 'INPUT' || state.sel < 0) return;
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    state.points.splice(state.sel, 1); state.sel = -1; hover = -1;
+    renderTable(); save(); draw();
+  } else if (NUDGE[e.key]) {
+    e.preventDefault();
+    const step = e.shiftKey ? 10 : 1;
+    const p = state.points[state.sel];
+    p.x += NUDGE[e.key][0] * step; p.y += NUDGE[e.key][1] * step;
+    touchPoint(p);
+    renderTable(); save(); draw();
+  }
+});
+
+/* ---------- coordinate paste ---------- */
+/* accepts 42°22'57.82"N 71°03'19.93"W · 42 22 57.82 N, 71 3 19.93 W ·
+   42.3827N 71.0555W · 42.3827, -71.0555[, alt] */
+function parseCoords(text){
+  if (!text) return null;
+  const out = {};
+  const dms = /(\d+(?:\.\d+)?)\s*[°º:d\s]?\s*(?:(\d+(?:\.\d+)?)\s*['′’m:\s]\s*)?(?:(\d+(?:\.\d+)?)\s*["″”s\s]?\s*)?([NSEW])\b/gi;
+  let m;
+  while ((m = dms.exec(text))) {
+    let v = +m[1] + (m[2] ? m[2] / 60 : 0) + (m[3] ? m[3] / 3600 : 0);
+    const h = m[4].toUpperCase();
+    if (h === 'S' || h === 'W') v = -v;
+    if (h === 'N' || h === 'S') out.lat = v; else out.lon = v;
+  }
+  if (out.lat != null && out.lon != null) return out;
+  const dec = text.match(/(-?\d+\.?\d*)\s*[,\s]\s*(-?\d+\.?\d*)(?:\s*[,\s]\s*(-?\d+\.?\d*))?/);
+  if (dec) {
+    const lat = +dec[1], lon = +dec[2];
+    if (Math.abs(lat) <= 90 && Math.abs(lon) <= 180 && (lat !== 0 || lon !== 0)) {
+      const r = { lat, lon };
+      if (dec[3] !== undefined) r.alt = +dec[3];
+      return r;
+    }
+  }
+  return null;
+}
+document.addEventListener('paste', e => {
+  const txt = (e.clipboardData || window.clipboardData).getData('text');
+  const c = parseCoords(txt);
+  if (!c) return;  // not a coordinate — normal paste
+  const t = e.target;
+  const round = v => Math.round(v * 1e7) / 1e7;
+  if (t.id === 'camLat' || t.id === 'camLon' || t.id === 'camAlt') {
+    e.preventDefault();
+    $('camLat').value = round(c.lat); $('camLon').value = round(c.lon);
+    if (c.alt != null) $('camAlt').value = c.alt;
+    save();
+    setStatus(`Camera origin set from pasted coordinates (${round(c.lat)}, ${round(c.lon)}).`);
+  } else {
+    let idx = -1;
+    if (t.dataset && t.dataset.i !== undefined && t.dataset.i !== '') idx = +t.dataset.i;
+    else if (t.tagName !== 'INPUT' && state.sel >= 0) idx = state.sel;  // paste with a point selected
+    if (idx < 0 || !state.points[idx]) return;
+    e.preventDefault();
+    const p = state.points[idx];
+    p.lat = round(c.lat); p.lon = round(c.lon);
+    if (c.alt != null) p.alt = c.alt;
+    p.estX = p.estY = p.err = null;
+    renderTable(); save(); draw();
+    setStatus(`Point ${idx + 1} set to ${round(c.lat)}, ${round(c.lon)}${c.alt != null ? ', ' + c.alt : ''} from pasted coordinates.`);
+  }
+});
+
+/* ---------- points table ---------- */
+function renderTable(){
+  const tb = $('ptTable').tBodies[0];
+  tb.innerHTML = '';
+  state.points.forEach((p, i) => {
+    const tr = document.createElement('tr');
+    if (i === state.sel) tr.className = 'sel';
+    tr.innerHTML =
+      `<td><input type="checkbox" data-i="${i}" data-k="use" ${p.use !== false ? 'checked' : ''}></td>` +
+      `<td>${i + 1}</td><td class="xy">${p.x.toFixed(1)}, ${p.y.toFixed(1)}</td>` +
+      ['lat', 'lon', 'alt'].map(k =>
+        `<td><input data-i="${i}" data-k="${k}" type="number" step="any" value="${p[k]}"></td>`).join('') +
+      `<td class="err">${p.err != null ? p.err.toFixed(1) : ''}</td>` +
+      `<td><button class="del" data-del="${i}">✕</button></td>`;
+    tr.onclick = e => {
+      // never rebuild the table on clicks into inputs/buttons — a rebuild
+      // would destroy the focused input mid-edit
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
+      if (state.sel !== i) { state.sel = i; markSel(); draw(); }
+    };
+    tb.appendChild(tr);
+  });
+  function markSel(){
+    [...tb.rows].forEach((r, k) => r.className = k === state.sel ? 'sel' : '');
+  }
+  tb.querySelectorAll('input').forEach(inp => {
+    inp.onfocus = () => {
+      const i = +inp.dataset.i;
+      if (state.sel !== i) { state.sel = i; markSel(); draw(); }
+    };
+    inp.onchange = () => {
+      const p = state.points[+inp.dataset.i];
+      if (inp.dataset.k === 'use') {
+        p.use = inp.checked;
+        save(); draw();
+        return;
+      }
+      p[inp.dataset.k] = inp.value;
+      p.estX = p.estY = p.err = null;
+      inp.closest('tr').querySelector('.err').textContent = '';
+      save(); draw();
+    };
+  });
+  tb.querySelectorAll('.del').forEach(b => {
+    b.onclick = e => {
+      e.stopPropagation();
+      state.points.splice(+b.dataset.del, 1); state.sel = -1;
+      renderTable(); save(); draw();
+    };
+  });
+}
+
+/* ---------- GeoCalib seed ---------- */
+$('geoBtn').onclick = async () => {
+  if (!state.imgBlob) return setStatus('Load an image first.', true);
+  $('geoBtn').disabled = true;
+  setStatus('Calling GeoCalib…');
+  try {
+    const fd = new FormData();
+    fd.append('image', state.imgBlob, 'image.jpg');
+    const r = await fetch(`${API}/geocalib`, { method: 'POST', body: fd });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    let focal = j.focal_px;
+    if (focal == null && j.vfov_deg != null)
+      focal = (state.img.naturalHeight / 2) / Math.tan(j.vfov_deg * Math.PI / 360);
+    const hfov = 2 * Math.atan(state.img.naturalWidth / (2 * focal)) * 180 / Math.PI;
+    const label =
+      `GeoCalib: hfov ${hfov.toFixed(1)}°, focal ${focal.toFixed(0)}px` +
+      (j.pitch_deg != null ? `, pitch ${j.pitch_deg.toFixed(1)}°` : '') +
+      (j.roll_deg != null ? `, roll ${j.roll_deg.toFixed(1)}°` : '') +
+      ' — will seed the solver';
+    state.seed = { hfov, focal, label, pitch_deg: j.pitch_deg, roll_deg: j.roll_deg, k1: j.k1 };
+    $('seedInfo').textContent = label;
+    setStatus(''); save();
+  } catch (e) { setStatus('GeoCalib failed: ' + e.message, true); }
+  $('geoBtn').disabled = false;
+};
+
+/* ---------- calibrate ---------- */
+function showResults(j){
+  $('results').style.display = 'block';
+  $('rms').textContent = j.rms_px != null ? j.rms_px.toFixed(2) + ' px' : '— (some points did not project)';
+  $('rms').style.color = j.rms_px != null && j.rms_px < 5 ? '#6fcf7a' : '#e0b84f';
+  $('fov').textContent = `${j.hfov_deg.toFixed(2)}° / ${j.vfov_deg.toFixed(2)}°`;
+  $('focal').textContent = `${j.focal_px.toFixed(1)} px`;
+  $('ptr').textContent = `${j.pan_deg.toFixed(2)}° / ${j.tilt_deg.toFixed(2)}° / ${j.roll_deg.toFixed(2)}°`;
+  const [k1, k2, , , k3] = j.camera_params.distortion;
+  $('dist').textContent = `${k1.toFixed(4)} / ${k2.toFixed(4)} / ${k3.toFixed(4)}`;
+  $('off').textContent = j.camera_offset_enu_m.map(v => v.toFixed(1)).join(', ') + ' m';
+}
+
+$('calBtn').onclick = async () => {
+  if (!state.img) return setStatus('Load an image first.', true);
+  const cam = { lat: +$('camLat').value, lon: +$('camLon').value, alt: +$('camAlt').value };
+  if ([$('camLat'), $('camLon'), $('camAlt')].some(i => i.value === ''))
+    return setStatus('Set the camera origin (lat / lon / alt).', true);
+  const complete = [];
+  state.points.forEach((p, i) => {
+    if (p.lat !== '' && p.lon !== '' && p.alt !== '')
+      complete.push({ i, x: p.x, y: p.y, lat: +p.lat, lon: +p.lon, alt: +p.alt, use: p.use !== false });
+  });
+  const included = complete.filter(c => c.use).length;
+  if (included < 4)
+    return setStatus(`Need ≥4 checked points with lat/lon/alt filled in (have ${included}).`, true);
+
+  const guesses = [15, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110];
+  if (state.seed) guesses.unshift(state.seed.hfov);
+
+  $('calBtn').disabled = true;
+  setStatus(`Calibrating with ${included} points (${complete.length - included} held out)…`);
+  try {
+    const r = await fetch(`${API}/calibrate`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        camera: cam,
+        image_width: state.img.naturalWidth,
+        image_height: state.img.naturalHeight,
+        points: complete.map(({ x, y, lat, lon, alt, use }) => ({ x, y, lat, lon, alt, use })),
+        hfov_guesses: guesses,
+        k1_seed: state.seed && state.seed.k1 != null ? state.seed.k1 : null,
+      }),
+    });
+    const j = await r.json();
+    if (!r.ok) throw new Error(typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail));
+    state.result = j;
+    state.points.forEach(p => { p.estX = p.estY = p.err = null; });
+    j.points.forEach((rp, k) => {
+      const p = state.points[complete[k].i];
+      p.estX = rp.est_x; p.estY = rp.est_y; p.err = rp.error_px;
+    });
+    showResults(j);
+    const method = j.method === 'rotation_only'
+      ? 'camera position held fixed (rotation + focal fit)'
+      : 'full refinement (distortion + translation)';
+    setStatus(`Done via ${method}, seeded at hfov ${j.seed_hfov_deg.toFixed(1)}°.` +
+      (j.warnings && j.warnings.length ? '\n⚠ ' + j.warnings.join('\n⚠ ') : ''));
+    renderTable(); save(); draw();
+  } catch (e) { setStatus('Calibration failed: ' + e.message, true); }
+  $('calBtn').disabled = false;
+};
+
+/* ---------- export / import / download ---------- */
+function downloadJson(obj, name){
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' }));
+  a.download = name; a.click();
+  URL.revokeObjectURL(a.href);
+}
+function pointsExport(){
+  return {
+    camera_name: $('camName').value.trim(),
+    imgUrl: state.imgUrl,
+    camera: { lat: $('camLat').value, lon: $('camLon').value, alt: $('camAlt').value },
+    points: state.points.map(p => ({ x: p.x, y: p.y, lat: p.lat, lon: p.lon, alt: p.alt, use: p.use !== false })),
+  };
+}
+$('dlBtn').onclick = () => state.result && downloadJson(state.result.camera_params, 'camera_params.json');
+$('expBtn').onclick = () => downloadJson(pointsExport(), 'calibration_points.json');
+
+/* full-resolution copy of the image with points, reprojections and horizon
+   lines burned in — same styling as the live canvas, scaled to image size */
+function renderAnnotated(){
+  const W = state.img.naturalWidth, H = state.img.naturalHeight;
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  const x = c.getContext('2d');
+  x.drawImage(state.img, 0, 0);
+  const s = Math.max(1, W / 1600);
+  x.textAlign = 'left';
+
+  for (const [m, color, text] of horizonModels()) {
+    const segs = horizonSegments(m);
+    x.strokeStyle = color; x.lineWidth = 1.5 * s; x.setLineDash([8 * s, 6 * s]);
+    let label = null;
+    for (const seg of segs) {
+      if (seg.length < 2) continue;
+      x.beginPath();
+      seg.forEach(([px, py], i) => i ? x.lineTo(px, py) : x.moveTo(px, py));
+      x.stroke();
+      if (!label)
+        label = seg.find(([px, py]) => px > 10 * s && px < W - 260 * s && py > 40 * s && py < H - 12 * s);
+    }
+    x.setLineDash([]);
+    if (label) {
+      x.fillStyle = color; x.font = `${11 * s}px system-ui`;
+      x.fillText(text, label[0] + 4 * s, label[1] - 6 * s);
+    }
+  }
+
+  state.points.forEach((p, i) => {
+    if (p.estX != null) {
+      x.globalAlpha = p.use === false ? 0.55 : 1;
+      x.strokeStyle = '#e0b84f'; x.lineWidth = s;
+      x.beginPath(); x.moveTo(p.x, p.y); x.lineTo(p.estX, p.estY); x.stroke();
+      x.strokeStyle = '#5ad06a'; x.lineWidth = 2 * s;
+      x.beginPath();
+      x.moveTo(p.estX - 6 * s, p.estY - 6 * s); x.lineTo(p.estX + 6 * s, p.estY + 6 * s);
+      x.moveTo(p.estX - 6 * s, p.estY + 6 * s); x.lineTo(p.estX + 6 * s, p.estY - 6 * s);
+      x.stroke();
+      if (p.err != null) {
+        x.fillStyle = '#5ad06a'; x.font = `${11 * s}px system-ui`;
+        x.fillText(p.err.toFixed(1) + 'px', p.estX + 9 * s, p.estY - 8 * s);
+      }
+      x.globalAlpha = 1;
+    }
+    x.beginPath(); x.arc(p.x, p.y, 5 * s, 0, 7);
+    x.fillStyle = p.use === false ? '#6b7280' : '#e0524a'; x.fill();
+    x.lineWidth = 2 * s; x.strokeStyle = '#fff'; x.stroke();
+    x.fillStyle = '#fff'; x.font = `bold ${11 * s}px system-ui`;
+    x.fillText(String(i + 1), p.x + 8 * s, p.y + 4 * s);
+  });
+
+  if (state.result) {
+    const j = state.result;
+    const hdr = `${$('camName').value.trim() || 'camera'} — RMS ${j.rms_px != null ? j.rms_px.toFixed(2) : '—'} px, ` +
+      `hfov ${j.hfov_deg.toFixed(1)}°, pan ${j.pan_deg.toFixed(1)}°, tilt ${j.tilt_deg.toFixed(1)}°, roll ${j.roll_deg.toFixed(1)}°`;
+    x.font = `${13 * s}px system-ui`;
+    x.fillStyle = 'rgba(0,0,0,.55)';
+    x.fillRect(8 * s, 8 * s, x.measureText(hdr).width + 12 * s, 22 * s);
+    x.fillStyle = '#fff';
+    x.fillText(hdr, 14 * s, 24 * s);
+  }
+  return new Promise(res => c.toBlob(res, 'image/jpeg', 0.92));
+}
+
+$('bundleBtn').onclick = async () => {
+  if (!state.img) return setStatus('Load an image first.', true);
+  if (!state.result) return setStatus('Calibrate first — the bundle includes the solved parameters.', true);
+  const name = $('camName').value.trim();
+  if (!name) return setStatus('Give the camera a name first (Camera section).', true);
+  $('bundleBtn').disabled = true;
+  setStatus('Exporting bundle…');
+  try {
+    const blob = await renderAnnotated();
+    const fd = new FormData();
+    fd.append('name', name);
+    fd.append('camera_params', JSON.stringify({ camera_name: name, ...state.result.camera_params }));
+    fd.append('points', JSON.stringify(pointsExport()));
+    fd.append('image', blob, 'annotated.jpg');
+    const ext = (state.imgBlob.type.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
+    fd.append('original', state.imgBlob, `original.${ext}`);
+    const r = await fetch(`${API}/export`, { method: 'POST', body: fd });
+    const j = await r.json();
+    if (!r.ok) throw new Error(typeof j.detail === 'string' ? j.detail : r.statusText);
+    setStatus(`Exported ${j.files.join(', ')} to\n${j.path}` +
+      (j.previous_backup ? `\nPrevious export moved to ${j.previous_backup}` : ''));
+  } catch (e) { setStatus('Export failed: ' + e.message, true); }
+  $('bundleBtn').disabled = false;
+};
+$('impBtn').onclick = () => $('impFile').click();
+$('impFile').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try {
+    const j = JSON.parse(await f.text());
+    $('camLat').value = j.camera?.lat ?? ''; $('camLon').value = j.camera?.lon ?? '';
+    $('camAlt').value = j.camera?.alt ?? '';
+    if (j.camera_name) $('camName').value = j.camera_name;
+    state.points = (j.points || []).map(p => ({ ...p, estX: null, estY: null, err: null }));
+    state.result = null;
+    $('results').style.display = 'none';
+    if (j.imgUrl){ $('imgUrl').value = j.imgUrl; loadFromUrl(j.imgUrl); }
+    renderTable(); save(); draw();
+  } catch (err) { setStatus('Import failed: ' + err.message, true); }
+  e.target.value = '';
+};
+$('clrBtn').onclick = () => {
+  if (!confirm('Clear all points and results?')) return;
+  state.points = []; state.sel = -1; state.result = null;
+  $('results').style.display = 'none';
+  renderTable(); save(); draw();
+};
+['camLat', 'camLon', 'camAlt', 'camName'].forEach(id => $(id).onchange = save);
+$('showHz').onchange = draw;
+
+resize();
+refreshLocalImages(restore());
+</script>
+</body>
+</html>
